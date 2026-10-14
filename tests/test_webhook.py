@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -122,10 +123,14 @@ def _mutate(payload: dict[str, Any], change: str) -> Any:
     elif change == "too_many_checks":
         payload["checks"] = {
             f"c{i}": {"ok": True, "since": None, "detail": "", "failures": 0}
-            for i in range(201)
+            for i in range(33)
         }
     elif change == "empty_watcher_id":
         payload["watcher_id"] = ""
+    elif change == "time_overflow":
+        payload["sent_at"] = "0001-01-01T00:00:00+14:00"
+    elif change == "check_time_overflow":
+        payload["checks"]["api"]["since"] = "9999-12-31T23:59:59-14:00"
     elif change == "outage_missing_key":
         payload["outage"] = {"since": None}
     return payload
@@ -149,6 +154,8 @@ def _mutate(payload: dict[str, Any], change: str) -> Any:
         "too_many_checks",
         "empty_watcher_id",
         "outage_missing_key",
+        "time_overflow",
+        "check_time_overflow",
     ],
 )
 async def test_invalid_payload_rejected(
@@ -227,3 +234,49 @@ async def test_interval_warning(
     await post(payload)
     await post(payload)
     assert caplog.text.count("raise the timeout") == 1
+
+
+async def test_deeply_nested_json_rejected(
+    hass: HomeAssistant, post, caplog: pytest.LogCaptureFixture
+) -> None:
+    """JSON nested deep enough to blow the parser's stack gets a clean 400."""
+    resp = await post(raw="[" * 200_000 + "]" * 200_000)
+    assert resp.status == 400
+    assert "Error processing webhook" not in caplog.text
+    assert "Traceback" not in caplog.text
+
+
+async def test_oversized_body_rejected(
+    hass: HomeAssistant, post, payload: dict[str, Any]
+) -> None:
+    """Bodies over 64 KiB are refused without being parsed."""
+    payload["padding"] = "x" * 70_000
+    resp = await post(payload)
+    assert resp.status == 400
+    online = entity_id(hass, "binary_sensor", "online")
+    assert hass.states.get(online).state == STATE_UNKNOWN
+
+
+async def test_unexpected_error_goes_through_reject_path(
+    hass: HomeAssistant, post, payload: dict[str, Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Any unexpected error while validating is a 400 with a short reason only."""
+    with patch(
+        "custom_components.ha_watcher.hub.validate_payload",
+        side_effect=OverflowError("value-from-payload"),
+    ):
+        resp = await post(payload)
+    assert resp.status == 400
+    assert "value-from-payload" not in caplog.text
+    assert "Error processing webhook" not in caplog.text
+
+
+async def test_oversized_chunked_body_rejected(hass: HomeAssistant, client) -> None:
+    """A body without Content-Length is still cut off at 64 KiB."""
+
+    async def chunks():
+        for _ in range(20):
+            yield b" " * 8192
+
+    resp = await client.post(f"/api/webhook/{WEBHOOK_ID}", data=chunks())
+    assert resp.status == 400

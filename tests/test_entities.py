@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from custom_components.ha_watcher.binary_sensor import (
     WatcherCheckSensor,
     WatcherOutageSensor,
@@ -24,7 +26,7 @@ async def test_new_checks_create_entities(
     registry = er.async_get(hass)
     before = len(er.async_entries_for_config_entry(registry, "entry1"))
 
-    payload["checks"]["entity:sensor.example_temperature"] = {
+    payload["checks"]["entity_sensor_example_temperature"] = {
         "ok": False,
         "since": "2026-10-13T11:59:00+00:00",
         "detail": "sensor.example_temperature has been unavailable for 2h",
@@ -34,10 +36,10 @@ async def test_new_checks_create_entities(
     after = len(er.async_entries_for_config_entry(registry, "entry1"))
     assert after == before + 1
     state = hass.states.get(
-        entity_id(hass, "binary_sensor", "check_entity:sensor.example_temperature")
+        entity_id(hass, "binary_sensor", "check_entity_sensor_example_temperature")
     )
     assert state.state == STATE_ON
-    assert state.attributes["check"] == "entity:sensor.example_temperature"
+    assert state.attributes["check"] == "entity_sensor_example_temperature"
 
     # Sending the same set again does not add duplicates.
     await post(payload)
@@ -79,7 +81,7 @@ async def test_payload_entities_unavailable_before_first_report(
     assert last.state == "unknown"
     hub = setup_entry.runtime_data
     assert hub.check("api") is None
-    assert hub.check_names == []
+    assert hub.known_checks == []
 
 
 async def test_entity_values_without_payload(hass: HomeAssistant, setup_entry) -> None:
@@ -99,3 +101,76 @@ async def test_entity_values_without_payload(hass: HomeAssistant, setup_entry) -
     hub.online = False
     hub._handle_timeout(None)
     assert hub.online is False
+
+
+def _check(ok: bool = True) -> dict[str, Any]:
+    return {"ok": ok, "since": None, "detail": "", "failures": 0}
+
+
+def _check_entities(hass: HomeAssistant) -> list[str]:
+    registry = er.async_get(hass)
+    return [
+        e.unique_id
+        for e in er.async_entries_for_config_entry(registry, "entry1")
+        if e.unique_id.startswith("entry1_check_")
+    ]
+
+
+async def test_invalid_check_names_ignored(
+    hass: HomeAssistant,
+    post,
+    payload: dict[str, Any],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Names outside [a-z0-9_]{1,40} are dropped (once-logged); the rest is used."""
+    payload["checks"]["Bad Name"] = _check()
+    payload["checks"]["core:safe_mode"] = _check()
+    payload["checks"]["x" * 41] = _check()
+    payload["checks"]["y" * 40] = _check()
+    resp = await post(payload)
+    assert resp.status == 200
+    await post(payload)
+    names = sorted(_check_entities(hass))
+    assert names == sorted(
+        f"entry1_check_{n}" for n in ("api", "backup", "host", "y" * 40)
+    )
+    assert caplog.text.count("Ignored 3 check(s) with invalid names") == 1
+    assert "Bad Name" not in caplog.text
+    hub = hass.config_entries.async_get_entry("entry1").runtime_data
+    assert "core:safe_mode" not in hub.payload["checks"]
+
+
+async def test_lifetime_check_cap_survives_reload(
+    hass: HomeAssistant,
+    post,
+    payload: dict[str, Any],
+    setup_entry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Rotating names cannot create more than 32 check entities, even across restarts."""
+    payload["checks"] = {f"a{i}": _check() for i in range(20)}
+    await post(payload)
+    payload["checks"] = {f"b{i}": _check() for i in range(20)}
+    await post(payload)
+    assert len(_check_entities(hass)) == 32
+    assert caplog.text.count("check limit of 32 reached") == 1
+    hub = setup_entry.runtime_data
+    # Known checks still report; names past the cap are not stored.
+    assert sorted(hub.payload["checks"]) == sorted(f"b{i}" for i in range(12))
+
+    await post(payload)
+    assert caplog.text.count("check limit of 32 reached") == 1
+
+    assert await hass.config_entries.async_reload(setup_entry.entry_id)
+    await hass.async_block_till_done()
+    hub = setup_entry.runtime_data
+    assert len(hub.known_checks) == 32
+    payload["checks"] = {"c0": _check()}
+    await post(payload)
+    assert len(_check_entities(hass)) == 32
+    assert hub.payload["checks"] == {}
+    # A known name is still accepted after the reload.
+    payload["checks"] = {"a0": _check(False)}
+    await post(payload)
+    state = hass.states.get(entity_id(hass, "binary_sensor", "check_a0"))
+    assert state.state == STATE_ON
