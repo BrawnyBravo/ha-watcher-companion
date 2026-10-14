@@ -114,7 +114,7 @@ example:
 | `api`, `host`, `core`, `backup`, `memory` | unchanged |
 | `core:safe_mode` | `core_safe_mode` |
 | `supervisor:health` | `supervisor_health` |
-| `addon:<slug>` | `addon_<slug>` |
+| `supervisor:addon:<slug>` | `supervisor_addon_<slug>` |
 | `entity:sensor.example_temperature` | `entity_sensor_example_temperature` |
 
 Mapping rule (the watcher implements exactly this, so names stay stable):
@@ -204,6 +204,9 @@ Rules on the Home Assistant side:
   than the last accepted one is rejected as a replay. Send at most one request per second;
   if two would share a second, wait for the next one. Build a fresh timestamp and
   signature for every request, also for retries.
+- A watcher restarted within the same second as its last signed push, or whose clock
+  steps backwards, gets `401` until its timestamp passes the last accepted one. It
+  recovers on its own once its clock moves past that value; no action is needed.
 - The last accepted timestamp is saved with the integration's routine save (at most
   5 minutes after a report) and on every clean shutdown or reload. Residual risk: if Home
   Assistant crashes before that save, one request captured in the last few minutes
