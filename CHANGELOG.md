@@ -23,3 +23,12 @@ and the project uses [Semantic Versioning](https://semver.org/).
   match `[a-z0-9_]{1,40}`, at most 32 check entities per entry over its lifetime
   (persisted). Malformed input of any kind (deep JSON nesting, out-of-range dates)
   gets a 400 and never reaches Home Assistant's error log.
+- Integer ranges in the payload (for example `interval_s` 1-86400); errors while applying
+  a valid report are contained (500, short log line).
+- Optional shared-secret signing (`X-HA-Watcher-Timestamp`, `X-HA-Watcher-Signature`
+  HMAC-SHA256, 300 s window, replay protection).
+- State is saved promptly (check names and online changes at once, the rest within 30 s),
+  so it survives a crash or power cut.
+- Deleting a retired check entity frees its slot in the 32-check limit.
+- After a restart, restored check data stays unavailable until the first fresh report.
+- Diagnostics also hide the address, entry name, shared secret and check details.

@@ -56,8 +56,12 @@ Requires Home Assistant 2026.3 or newer.
    `http://192.0.2.10:8123/api/webhook/3f5c...`. Copy it into the watcher's
    configuration (see the ha-watcher documentation) and restart the watcher.
 
-Keep the address private: anyone who has it can send status reports. You can see it
-again at any time under the integration's **Configure** button.
+Keep the address private: anyone who has it can send status reports, including fake
+"all OK" reports that would hide a dead watcher. You can see it again at any time under
+the integration's **Configure** button.
+
+**Home Assistant's own log can contain the webhook address** (for example when a request
+arrives from outside your network). Remove it before posting logs anywhere.
 
 Add one entry per watcher if you run more than one.
 
@@ -67,6 +71,7 @@ Add one entry per watcher if you run more than one.
 | --- | --- | --- |
 | Offline timeout | 5 minutes (minimum 2) | Mark the watcher offline when no valid report has arrived for this long. Keep it at least twice the watcher's report interval. |
 | Only accept reports from the local network | on | Reject reports that come from outside your network. |
+| Shared secret | empty | Optional. When set, only reports signed with this secret are accepted (the watcher needs the same secret). Recommended when Home Assistant is reached over plain HTTP on a shared network, because anyone who sees one request could otherwise forge or replay reports. |
 
 ## Entities
 
@@ -76,7 +81,7 @@ Each watcher becomes one device with these entities:
 | --- | --- | --- |
 | Watcher online | Connectivity | On while reports keep arriving. Off after the offline timeout. Unknown right after Home Assistant starts, until the first report or the timeout. |
 | Home Assistant outage | Problem | On while the watcher considers Home Assistant to be in an outage. Attribute `since`. |
-| Check *name* | Problem | One per watcher check (for example `Check api`, `Check backup`). On means failing; unknown means not run yet. Attributes `detail`, `failures`, `since`. New checks appear automatically, up to 32 per watcher in total (a safety limit; remove and re-add the integration to reset it). |
+| Check *name* | Problem | One per watcher check (for example `Check api`, `Check backup`). On means failing; unknown means not run yet. Attributes `detail`, `failures`, `since`. New checks appear automatically, up to 32 per watcher in total (a safety limit). |
 | Last report | Timestamp (diagnostic) | When Home Assistant last received a valid report. Attributes `sent_at`, `interval_s`, `watcher_version`. |
 | Alerts sent (24h) | Number | Alerts the watcher sent in the last 24 hours. |
 | Last power cycle | Timestamp | When the watcher last power-cycled Home Assistant's host. |
@@ -84,7 +89,14 @@ Each watcher becomes one device with these entities:
 
 While the watcher is offline, the check, outage and count entities show as unavailable
 (their data would be stale); **Watcher online** and **Last report** stay visible.
-The last report is kept across restarts.
+The last report is kept across restarts, but after a restart the check, outage and count
+entities stay unavailable until the first fresh report arrives, so old data is never
+shown as current.
+
+**Retired checks.** A check the watcher no longer reports shows as unavailable. After the
+next Home Assistant restart (or a reload of the integration) it is no longer provided, and
+you can delete it from its entity settings. Deleting it also frees its place in the
+32-check limit.
 
 ## Events
 
@@ -139,8 +151,10 @@ The report format is documented in [docs/PAYLOAD.md](docs/PAYLOAD.md) (contract 
   that the watcher box can reach Home Assistant on that address, and the Home Assistant
   log for "Rejected a status report". If the watcher reaches Home Assistant through a
   reverse proxy or from another network, turn off the local-network option.
-- **Diagnostics**: on the device page, **Download diagnostics**. The webhook id is
-  removed from the file, so it is safe to attach to an issue.
+- **Diagnostics**: on the device page, **Download diagnostics**. The webhook address,
+  shared secret, entry name, watcher id and check detail texts are removed from the file.
+  Still read it before attaching it to an issue.
+- **Logs**: Home Assistant's log can contain the webhook address; remove it before sharing.
 
 ## Development
 

@@ -9,12 +9,12 @@ every message against it.
 
 | Item | Value |
 | --- | --- |
-| Method | `POST` (anything else gets `405 Method Not Allowed`) |
+| Method | `POST`. `HEAD` gets `200` (Home Assistant lets sites check that the URL exists); other methods get `405 Method Not Allowed`. |
 | URL | The webhook address shown when the integration is added, for example `http://192.0.2.10:8123/api/webhook/<64 hex characters>` |
 | Body | One JSON object, UTF-8, at most 64 KiB (65536 bytes); larger bodies get `400` without being parsed |
 | `Content-Type` | `application/json` (recommended; the body is parsed as JSON either way) |
-| Authentication | None besides the webhook id in the URL. Treat the URL as a secret. |
-| Network | By default Home Assistant only accepts the request from a local network address. If it arrives from elsewhere it is silently ignored (HTTP 200, no effect). The user can turn this off in the integration options. |
+| Authentication | The webhook id in the URL, plus an **optional shared-secret signature** (see Signing). Treat the URL as a secret. |
+| Network | By default Home Assistant only accepts the request from a local network address. A request from elsewhere gets HTTP 200 with no effect, and Home Assistant core logs a warning that contains the webhook id. The user can turn the local-only setting off in the integration options. |
 
 ### Recommended watcher configuration
 
@@ -46,11 +46,21 @@ part of the contract.
 | Status | Body | Meaning |
 | --- | --- | --- |
 | `200` | `{"ok": true}` | Accepted. |
-| `400` | `{"ok": false, "error": "invalid payload"}` | Not JSON, or does not match this contract. Nothing was changed. Home Assistant logs one warning naming the first bad field (never the values) until a valid report arrives. |
+| `400` | `{"ok": false, "error": "invalid payload"}` | Too large, not JSON, or does not match this contract. Nothing was changed. The integration logs one warning naming the first bad field (never the values) until a valid report arrives. |
+| `401` | `{"ok": false, "error": "unauthorized"}` | A shared secret is set and the request is unsigned, wrongly signed, outside the time window or a replay. Logged once (reason only). |
+| `500` | `{"ok": false, "error": "processing failed"}` | The report was valid but Home Assistant failed while applying it. Logged once with the error type only. |
 | `200` with an empty body | | The webhook id is unknown (integration removed), or a remote request reached a local-only webhook. Home Assistant answers 200 on purpose so the URL cannot be probed. |
-| `405` | | Not a POST. |
+| `405` | | Not a POST (or HEAD). |
 
-The watcher may log a `400` once, but must not retry the same payload.
+The watcher may log a `400`/`401` once, but must not retry the same payload.
+
+#### What Home Assistant itself logs
+
+Home Assistant core (not this integration) writes the **full webhook id** to its log in
+some cases: a request with the wrong method (warning), a remote request to a local-only
+webhook (warning), and a request to an unknown id (info, plus the first 64 body bytes at
+debug level). Users should remove the webhook address before sharing logs. The
+integration's own log lines never contain the id, the secret or payload values.
 
 ## Body
 
@@ -80,14 +90,14 @@ versions can add fields without breaking older integrations.
 
 | Key | Type | Rules | Meaning |
 | --- | --- | --- | --- |
-| `v` | integer | `>= 1` | Contract version. Send `1`. Integrations accept any higher number as long as the v1 keys are present and valid. |
+| `v` | integer | 1-1000 | Contract version. Send `1`. Integrations accept any higher number as long as the v1 keys are present and valid. |
 | `watcher_id` | string | 1-128 characters (longer is cut) | Stable id of this watcher install, for example a host name or a random id saved on first run. Not shown as an entity; redacted from diagnostics. |
 | `version` | string | up to 128 characters | ha-watcher software version. Shown as the device's software version. |
 | `sent_at` | timestamp | see Timestamps | When the watcher built this report. Shown as an attribute only; the integration uses its own receive time for "Last report" so clock drift on the watcher box cannot cause false offline alerts. |
-| `interval_s` | integer | `>= 1` | Seconds until the next scheduled report. If twice this is more than the offline timeout, Home Assistant logs one warning. |
+| `interval_s` | integer | 1-86400 | Seconds until the next scheduled report. If twice this is more than the offline timeout, Home Assistant logs one warning. |
 | `checks` | object | at most 32 entries (more is a `400`) | One entry per check, keyed by check name. See Checks. |
 | `outage` | object | | See Outage. |
-| `alerts_sent_24h` | integer | `>= 0` | Number of alerts the watcher sent in the last 24 hours. |
+| `alerts_sent_24h` | integer | 0-1000000000 | Number of alerts the watcher sent in the last 24 hours. |
 | `last_power_cycle` | timestamp or `null` | | When the watcher last power-cycled Home Assistant's host; `null` if never or unknown. |
 | `last_recovery_command` | timestamp or `null` | | When the watcher last ran a recovery command (for example a remote restart); `null` if never or unknown. |
 
@@ -107,10 +117,19 @@ example:
 | `addon:<slug>` | `addon_<slug>` |
 | `entity:sensor.example_temperature` | `entity_sensor_example_temperature` |
 
-Suggested mapping: lowercase, replace every character outside `a-z0-9_` with `_`, and if
-the result is longer than 40 characters keep the first 31 and append `_` plus the first 8
-hex digits of the SHA-256 of the original key (stable and collision-resistant). Put the
-original key in `detail` if the user needs to see it.
+Mapping rule (the watcher implements exactly this, so names stay stable):
+
+1. Process the original keys **in sorted order** (plain string sort of the original key).
+2. Lowercase the key and replace every character outside `a-z0-9_` with `_`.
+3. If the result is longer than 40 characters, keep the first 31, then `_`, then the first
+   8 hex digits of `sha256(original key as UTF-8)`.
+4. **Collisions:** if the mapped name is already taken by an earlier key in this report,
+   use the first 31 characters of the mapped name + `_` + the first 8 hex digits of
+   `sha256(original key)` instead. Example: `core:safe_mode` and `core_safe_mode` both map
+   to `core_safe_mode`; `core:safe_mode` sorts first and keeps it, `core_safe_mode` becomes
+   `core_safe_mode_` + 8 hex digits.
+
+Put the original key in `detail` if the user needs to see it.
 
 Each name becomes one problem sensor in Home Assistant, named "Check `<name>`"; a name
 seen for the first time creates a new entity, and a name that stops appearing makes its
@@ -121,15 +140,16 @@ new entity.
 ever (the set of known names is saved and survives restarts). After that, reports are
 still accepted, known checks keep updating, and new names are ignored with one warning.
 This stops anyone who can reach the webhook from flooding Home Assistant's entity
-registry. The user resets it by removing and re-adding the integration entry, so a
-watcher should not churn through check names.
+registry. A check that is missing from the last report gets no entity after the next
+Home Assistant restart or integration reload, so the user can then delete its leftover
+entity, which frees its slot. A watcher should still not churn through check names.
 
 | Key | Type | Rules | Meaning |
 | --- | --- | --- | --- |
 | `ok` | `true`, `false` or `null` | must be a JSON boolean or null | `true` passing, `false` failing, `null` not known yet (not run, skipped). Shown as problem off / on / unknown. |
 | `since` | timestamp or `null` | | When the check entered its current `ok` state. |
 | `detail` | string | longer than 1024 characters is cut | Human-readable result, for example `Newest backup is 2d old`. Must not contain tokens, passwords or other secrets: it is shown in Home Assistant and stored in its database. |
-| `failures` | integer | `>= 0` | Consecutive failed runs (0 when passing). |
+| `failures` | integer | 0-1000000 | Consecutive failed runs (0 when passing). |
 
 ### Outage
 
@@ -153,6 +173,43 @@ every timestamp to UTC. Dates so extreme that UTC conversion overflows (for exam
 
 The integration does not coerce types: `"60"` is not an integer, `1` is not a boolean,
 and `true` is not an integer. Use native JSON types.
+
+## Signing (optional)
+
+When the user sets a **shared secret** in the integration options, every request must be
+signed; unsigned or wrongly signed requests get `401`. Without a secret, signature
+headers are ignored. Signing is recommended when Home Assistant is reached over plain
+HTTP on a network shared with other people or devices: it stops anyone who has seen the
+URL from posting forged "all OK" reports, and from replaying a captured one.
+
+Headers:
+
+| Header | Value |
+| --- | --- |
+| `X-HA-Watcher-Timestamp` | Current Unix time in whole seconds, decimal digits only, for example `1760443200` |
+| `X-HA-Watcher-Signature` | `sha256=` + lowercase hex of `HMAC-SHA256(key = secret as UTF-8, message = timestamp + "." + raw body bytes)` |
+
+Rules on the Home Assistant side:
+
+- The timestamp must be within **300 seconds** of Home Assistant's clock (keep both
+  clocks synced with NTP).
+- The signature is compared in constant time against the **exact raw body bytes** that
+  were sent; sign the bytes you send, after serialising.
+- A signature already accepted within the last 10 minutes is rejected as a replay, so
+  build a fresh timestamp and signature for every request (also for retries).
+
+```python
+import hashlib, hmac, time
+
+
+def sign(secret: str, body: bytes) -> dict[str, str]:
+    stamp = str(int(time.time()))
+    digest = hmac.new(secret.encode(), stamp.encode() + b"." + body, hashlib.sha256)
+    return {
+        "X-HA-Watcher-Timestamp": stamp,
+        "X-HA-Watcher-Signature": "sha256=" + digest.hexdigest(),
+    }
+```
 
 ## Example sender (Python, standard library only)
 
