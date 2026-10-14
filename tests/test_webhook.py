@@ -1,0 +1,229 @@
+"""Webhook payload handling tests."""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import pytest
+
+from custom_components.ha_watcher.const import DOMAIN
+from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNKNOWN
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
+
+from .conftest import WEBHOOK_ID
+from .helpers import entity_id
+
+
+async def test_valid_payload_updates_entities(
+    hass: HomeAssistant, post, payload: dict[str, Any]
+) -> None:
+    """A valid report turns the watcher online and fills every entity."""
+    online = entity_id(hass, "binary_sensor", "online")
+    assert hass.states.get(online).state == STATE_UNKNOWN
+
+    resp = await post(payload)
+    assert resp.status == 200
+    assert await resp.json() == {"ok": True}
+
+    assert hass.states.get(online).state == STATE_ON
+    assert (
+        hass.states.get(entity_id(hass, "binary_sensor", "outage")).state == STATE_OFF
+    )
+
+    api = hass.states.get(entity_id(hass, "binary_sensor", "check_api"))
+    assert api.state == STATE_OFF
+    assert api.attributes["detail"] == "API OK in 40 ms"
+    assert api.attributes["device_class"] == "problem"
+    backup = hass.states.get(entity_id(hass, "binary_sensor", "check_backup"))
+    assert backup.state == STATE_ON
+    assert backup.attributes["failures"] == 3
+    assert backup.attributes["since"] == "2026-10-12T03:00:00+00:00"
+    assert backup.attributes["friendly_name"] == "Test Watcher Check backup"
+    host = hass.states.get(entity_id(hass, "binary_sensor", "check_host"))
+    assert host.state == STATE_UNKNOWN
+
+    assert hass.states.get(entity_id(hass, "sensor", "alerts_sent_24h")).state == "2"
+    assert (
+        hass.states.get(entity_id(hass, "sensor", "last_power_cycle")).state
+        == "2026-10-10T08:30:00+00:00"
+    )
+    assert (
+        hass.states.get(entity_id(hass, "sensor", "last_recovery_command")).state
+        == STATE_UNKNOWN
+    )
+    last = hass.states.get(entity_id(hass, "sensor", "last_report"))
+    assert last.state not in (STATE_UNKNOWN, "unavailable")
+    assert last.attributes["watcher_version"] == "1.4.0"
+    assert last.attributes["interval_s"] == 60
+
+    device = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, "entry1"), "entry1"
+    )
+    assert device is not None
+    assert device.sw_version == "1.4.0"
+
+
+async def test_version_change_updates_device(
+    hass: HomeAssistant, post, payload: dict[str, Any]
+) -> None:
+    """A new watcher version is written to the device registry."""
+    await post(payload)
+    payload["version"] = "2.0.0"
+    await post(payload)
+    device = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, "entry1"), "entry1"
+    )
+    assert device.sw_version == "2.0.0"
+
+
+async def test_future_version_with_extra_keys_accepted(
+    hass: HomeAssistant, post, payload: dict[str, Any]
+) -> None:
+    """Newer contract versions and unknown keys are accepted and ignored."""
+    payload["v"] = 2
+    payload["new_top_level"] = {"x": 1}
+    payload["checks"]["api"]["latency_ms"] = 12
+    payload["outage"]["reason"] = "x"
+    resp = await post(payload)
+    assert resp.status == 200
+    hub = hass.config_entries.async_get_entry("entry1").runtime_data
+    assert "new_top_level" not in hub.payload
+    assert "latency_ms" not in hub.payload["checks"]["api"]
+    assert "reason" not in hub.payload["outage"]
+
+
+def _mutate(payload: dict[str, Any], change: str) -> Any:
+    if change == "not_object":
+        return [1, 2]
+    if change == "missing_key":
+        del payload["interval_s"]
+    elif change == "bool_as_int":
+        payload["alerts_sent_24h"] = True
+    elif change == "negative":
+        payload["alerts_sent_24h"] = -1
+    elif change == "zero_version":
+        payload["v"] = 0
+    elif change == "naive_time":
+        payload["sent_at"] = "2026-10-13T12:00:00"
+    elif change == "garbage_time":
+        payload["last_power_cycle"] = "yesterday"
+    elif change == "time_not_string":
+        payload["sent_at"] = 12345
+    elif change == "ok_not_bool":
+        payload["checks"]["api"]["ok"] = "yes"
+    elif change == "detail_not_string":
+        payload["checks"]["api"]["detail"] = 5
+    elif change == "checks_not_object":
+        payload["checks"] = []
+    elif change == "empty_check_name":
+        payload["checks"][""] = payload["checks"]["api"]
+    elif change == "too_many_checks":
+        payload["checks"] = {
+            f"c{i}": {"ok": True, "since": None, "detail": "", "failures": 0}
+            for i in range(201)
+        }
+    elif change == "empty_watcher_id":
+        payload["watcher_id"] = ""
+    elif change == "outage_missing_key":
+        payload["outage"] = {"since": None}
+    return payload
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "not_object",
+        "missing_key",
+        "bool_as_int",
+        "negative",
+        "zero_version",
+        "naive_time",
+        "garbage_time",
+        "time_not_string",
+        "ok_not_bool",
+        "detail_not_string",
+        "checks_not_object",
+        "empty_check_name",
+        "too_many_checks",
+        "empty_watcher_id",
+        "outage_missing_key",
+    ],
+)
+async def test_invalid_payload_rejected(
+    hass: HomeAssistant, post, payload: dict[str, Any], change: str
+) -> None:
+    """Payloads that break the contract get a 400 and change nothing."""
+    resp = await post(_mutate(payload, change))
+    assert resp.status == 400
+    assert await resp.json() == {"ok": False, "error": "invalid payload"}
+    online = entity_id(hass, "binary_sensor", "online")
+    assert hass.states.get(online).state == STATE_UNKNOWN
+
+
+async def test_bad_json_rejected(hass: HomeAssistant, post) -> None:
+    """A body that is not JSON gets a 400."""
+    resp = await post(raw="{not json")
+    assert resp.status == 400
+
+
+async def test_rejection_logged_once_without_values(
+    hass: HomeAssistant,
+    post,
+    payload: dict[str, Any],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Bad reports are logged once (no payload values) until a good one arrives."""
+    caplog.set_level(logging.INFO, logger="custom_components.ha_watcher")
+    bad = dict(payload)
+    bad["checks"] = dict(payload["checks"])
+    bad["checks"]["api"] = {**payload["checks"]["api"], "ok": "secret-token-value"}
+    await post(bad)
+    await post(bad)
+    warnings = [
+        r for r in caplog.records if "Rejected a status report" in r.getMessage()
+    ]
+    assert len(warnings) == 1
+    assert "secret-token-value" not in caplog.text
+    assert "['checks']['api']" in warnings[0].getMessage()
+
+    await post(payload)
+    assert "valid again" in caplog.text
+    await post(bad)
+    warnings = [
+        r for r in caplog.records if "Rejected a status report" in r.getMessage()
+    ]
+    assert len(warnings) == 2
+    hub = hass.config_entries.async_get_entry("entry1").runtime_data
+    assert hub.bad_payloads == 3
+
+
+async def test_get_not_allowed(hass: HomeAssistant, client) -> None:
+    """Only POST is accepted."""
+    resp = await client.get(f"/api/webhook/{WEBHOOK_ID}")
+    assert resp.status == 405
+
+
+async def test_long_text_truncated(
+    hass: HomeAssistant, post, payload: dict[str, Any]
+) -> None:
+    """Over-long detail text is cut to 1024 characters rather than rejected."""
+    payload["checks"]["api"]["detail"] = "x" * 5000
+    resp = await post(payload)
+    assert resp.status == 200
+    state = hass.states.get(entity_id(hass, "binary_sensor", "check_api"))
+    assert len(state.attributes["detail"]) == 1024
+
+
+async def test_interval_warning(
+    hass: HomeAssistant,
+    post,
+    payload: dict[str, Any],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A report interval too close to the timeout is warned about once."""
+    payload["interval_s"] = 200  # 2 x 200 s is more than the 5 minute timeout
+    await post(payload)
+    await post(payload)
+    assert caplog.text.count("raise the timeout") == 1
