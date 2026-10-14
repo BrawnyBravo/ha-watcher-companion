@@ -24,8 +24,11 @@ EVENT_ONLINE: Final = "ha_watcher_online"
 PAYLOAD_VERSION: Final = 1
 
 # Guard rails on untrusted input.
-MAX_CHECKS: Final = 200
-MAX_CHECK_NAME_LEN: Final = 128
+MAX_BODY_BYTES: Final = 64 * 1024
+MAX_CHECKS: Final = 32  # per payload
+MAX_KNOWN_CHECKS: Final = 32  # distinct check names (entities) per entry, ever
+CHECK_NAME_PATTERN: Final = r"[a-z0-9_]{1,40}"
+MAX_CHECK_NAME_LEN: Final = 128  # structural limit before the pattern is applied
 MAX_DETAIL_LEN: Final = 1024
 MAX_TEXT_LEN: Final = 128
 

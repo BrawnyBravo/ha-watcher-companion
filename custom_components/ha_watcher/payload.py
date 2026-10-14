@@ -41,10 +41,14 @@ def _timestamp(value: Any) -> str:
     """ISO 8601 timestamp with a timezone, normalised to UTC ISO text."""
     if not isinstance(value, str):
         raise vol.Invalid("expected an ISO 8601 timestamp string")
-    parsed = dt_util.parse_datetime(value)
-    if parsed is None or parsed.tzinfo is None:
-        raise vol.Invalid("expected an ISO 8601 timestamp with a timezone")
-    return parsed.astimezone(UTC).isoformat()
+    try:
+        parsed = dt_util.parse_datetime(value)
+        if parsed is None or parsed.tzinfo is None:
+            raise vol.Invalid("expected an ISO 8601 timestamp with a timezone")
+        return parsed.astimezone(UTC).isoformat()
+    except (ValueError, OverflowError) as err:
+        # Extreme dates (year 1 with +14:00, year 9999 with -14:00) overflow.
+        raise vol.Invalid("timestamp out of range") from err
 
 
 def _optional_timestamp(value: Any) -> str | None:

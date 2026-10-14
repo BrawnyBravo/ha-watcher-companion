@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from http import HTTPStatus
 import json
 import logging
+import re
 from typing import Any
 
 from aiohttp import web
@@ -26,6 +27,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CHECK_NAME_PATTERN,
     CONF_LOCAL_ONLY,
     CONF_OFFLINE_TIMEOUT,
     CONF_WEBHOOK_ID,
@@ -34,12 +36,16 @@ from .const import (
     DOMAIN,
     EVENT_OFFLINE,
     EVENT_ONLINE,
+    MAX_BODY_BYTES,
+    MAX_KNOWN_CHECKS,
     STORAGE_SAVE_DELAY,
     STORAGE_VERSION,
 )
 from .payload import error_location, validate_payload
 
 _LOGGER = logging.getLogger(__name__)
+
+_CHECK_NAME_RE = re.compile(CHECK_NAME_PATTERN)
 
 type HAWatcherConfigEntry = ConfigEntry[WatcherHub]
 
@@ -75,6 +81,11 @@ class WatcherHub:
         self.bad_payloads = 0
         self._bad_logged = False
         self._interval_warned = False
+        self._invalid_names_logged = False
+        self._cap_logged = False
+        # Every check name that ever got an entity, in order. Persisted, and
+        # capped at MAX_KNOWN_CHECKS so a sender cannot flood the registry.
+        self.known_checks: list[str] = []
         self._timer: CALLBACK_TYPE | None = None
         self._listeners: list[Callable[[], None]] = []
         self._new_check_listeners: list[Callable[[list[str]], None]] = []
@@ -92,6 +103,11 @@ class WatcherHub:
             if (raw := stored.get("last_report")) is not None:
                 self.last_report = dt_util.parse_datetime(raw)
             self._previous_known = stored.get("online")
+            self.known_checks = [
+                name
+                for name in stored.get("known_checks") or []
+                if isinstance(name, str) and _CHECK_NAME_RE.fullmatch(name)
+            ][:MAX_KNOWN_CHECKS]
         webhook.async_register(
             self.hass,
             DOMAIN,
@@ -137,12 +153,6 @@ class WatcherHub:
 
     # ---- data access -----------------------------------------------------
 
-    @property
-    def check_names(self) -> list[str]:
-        if not self.payload:
-            return []
-        return list(self.payload["checks"])
-
     def check(self, name: str) -> dict[str, Any] | None:
         if not self.payload:
             return None
@@ -154,17 +164,35 @@ class WatcherHub:
     async def _handle_webhook(
         self, hass: HomeAssistant, webhook_id: str, request: web.Request
     ) -> web.Response:
+        # Nothing raised here may reach Home Assistant's webhook logger, which
+        # would log the request; every failure goes through _reject instead.
         try:
-            body = await request.text()
-            data = json.loads(body)
-        except ValueError:
-            return self._reject("body is not valid JSON")
-        try:
-            payload = validate_payload(data)
-        except vol.Invalid as err:
-            return self._reject(error_location(err))
+            payload = await self._read_payload(request)
+        except _Rejected as err:
+            return self._reject(err.reason)
+        except Exception as err:
+            return self._reject(f"unexpected {type(err).__name__}")
         self.async_process_payload(payload)
         return web.json_response({"ok": True})
+
+    async def _read_payload(self, request: web.Request) -> dict[str, Any]:
+        """Read, size-limit, parse and validate a request body."""
+        too_big = f"body larger than {MAX_BODY_BYTES} bytes"
+        if (request.content_length or 0) > MAX_BODY_BYTES:
+            raise _Rejected(too_big)
+        body = bytearray()
+        while chunk := await request.content.read(MAX_BODY_BYTES):
+            body += chunk
+            if len(body) > MAX_BODY_BYTES:
+                raise _Rejected(too_big)
+        try:
+            data = json.loads(body)
+        except (ValueError, RecursionError):
+            raise _Rejected("body is not valid JSON") from None
+        try:
+            return validate_payload(data)
+        except vol.Invalid as err:
+            raise _Rejected(error_location(err)) from None
 
     def _reject(self, reason: str) -> web.Response:
         self.bad_payloads += 1
@@ -184,20 +212,59 @@ class WatcherHub:
         if self._bad_logged:
             _LOGGER.info("Status reports for %s are valid again", self.entry.title)
         self._bad_logged = False
-        known = set(self.check_names)
+        payload["checks"] = self._filter_checks(payload["checks"])
         old_version = self.payload["version"] if self.payload else None
         self.payload = payload
         self.last_report = dt_util.utcnow()
         self._warn_interval(payload["interval_s"])
         if payload["version"] != old_version:
             self._update_device_version(payload["version"])
-        if new := [name for name in payload["checks"] if name not in known]:
+        if new := [n for n in payload["checks"] if n not in self.known_checks]:
+            self.known_checks.extend(new)
+            # Save the grown set soon so a crash cannot reset the cap.
+            self._store.async_delay_save(self._data_to_store, 1)
             for add in list(self._new_check_listeners):
                 add(new)
         self._set_online(True)
         self._schedule_timeout()
         self._store.async_delay_save(self._data_to_store, STORAGE_SAVE_DELAY)
         self._notify()
+
+    def _filter_checks(
+        self, checks: dict[str, dict[str, Any]]
+    ) -> dict[str, dict[str, Any]]:
+        """Drop invalid names and new names past the lifetime cap (logged once)."""
+        invalid = [n for n in checks if not _CHECK_NAME_RE.fullmatch(n)]
+        if invalid and not self._invalid_names_logged:
+            self._invalid_names_logged = True
+            _LOGGER.warning(
+                "Ignored %s check(s) with invalid names from %s; check names must "
+                "be 1-40 characters of a-z, 0-9 and _",
+                len(invalid),
+                self.entry.title,
+            )
+        room = MAX_KNOWN_CHECKS - len(self.known_checks)
+        kept: dict[str, dict[str, Any]] = {}
+        refused = 0
+        for name, check in checks.items():
+            if name in invalid:
+                continue
+            if name not in self.known_checks:
+                if room <= 0:
+                    refused += 1
+                    continue
+                room -= 1
+            kept[name] = check
+        if refused and not self._cap_logged:
+            self._cap_logged = True
+            _LOGGER.warning(
+                "%s: check limit of %s reached; ignoring %s new check name(s). "
+                "Remove this integration entry and add it again to reset the limit",
+                self.entry.title,
+                MAX_KNOWN_CHECKS,
+                refused,
+            )
+        return kept
 
     def _warn_interval(self, interval_s: int) -> None:
         if self._interval_warned or interval_s * 2 <= self.timeout.total_seconds():
@@ -282,6 +349,7 @@ class WatcherHub:
             "payload": self.payload,
             "last_report": self.last_report.isoformat() if self.last_report else None,
             "online": self._previous_known,
+            "known_checks": self.known_checks,
         }
 
     def diagnostics(self) -> dict[str, Any]:
@@ -294,3 +362,11 @@ class WatcherHub:
             "rejected_payloads_since_start": self.bad_payloads,
             "payload": self.payload,
         }
+
+
+class _Rejected(Exception):
+    """A report that is refused with a short reason (no payload values)."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason

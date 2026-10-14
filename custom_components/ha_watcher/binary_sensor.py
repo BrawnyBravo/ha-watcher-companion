@@ -28,7 +28,7 @@ async def async_setup_entry(
         WatcherOnlineSensor(hub),
         WatcherOutageSensor(hub),
     ]
-    entities.extend(WatcherCheckSensor(hub, name) for name in hub.check_names)
+    entities.extend(WatcherCheckSensor(hub, name) for name in hub.known_checks)
     async_add_entities(entities)
 
     @callback
