@@ -1,0 +1,64 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add an HA Watcher",
+        "description": "This creates a private web address (a webhook) that your ha-watcher service sends its status to. The ha-watcher service must run on a different machine from Home Assistant. You will see the address after you press Submit.",
+        "data": {
+          "name": "Name",
+          "local_only": "Only accept reports from the local network"
+        },
+        "data_description": {
+          "name": "Shown as the device name, for example the name of the machine running ha-watcher.",
+          "local_only": "Recommended. Turn off only if the watcher reaches Home Assistant over the internet."
+        }
+      }
+    },
+    "create_entry": {
+      "default": "Copy this address into the `home_assistant_push.url` setting of your ha-watcher service:\n\n`{webhook_url}`\n\nKeep it private: anyone who knows it can send status reports. You can see it again under this integration's **Configure** button."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "HA Watcher options",
+        "description": "Webhook address for the ha-watcher service:\n\n`{webhook_url}`",
+        "data": {
+          "offline_timeout": "Offline timeout",
+          "local_only": "Only accept reports from the local network"
+        },
+        "data_description": {
+          "offline_timeout": "Mark the watcher offline when no valid report has arrived for this many minutes. Use at least twice the watcher's report interval.",
+          "local_only": "Turn off only if the watcher reaches Home Assistant over the internet."
+        }
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "online": {
+        "name": "Watcher online"
+      },
+      "outage": {
+        "name": "Home Assistant outage"
+      },
+      "check": {
+        "name": "Check {check}"
+      }
+    },
+    "sensor": {
+      "last_report": {
+        "name": "Last report"
+      },
+      "alerts_sent_24h": {
+        "name": "Alerts sent (24h)"
+      },
+      "last_power_cycle": {
+        "name": "Last power cycle"
+      },
+      "last_recovery_command": {
+        "name": "Last recovery command"
+      }
+    }
+  }
+}
