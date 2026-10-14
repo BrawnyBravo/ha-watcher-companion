@@ -9,6 +9,7 @@ DOMAIN: Final = "ha_watcher"
 CONF_WEBHOOK_ID: Final = "webhook_id"
 CONF_LOCAL_ONLY: Final = "local_only"
 CONF_OFFLINE_TIMEOUT: Final = "offline_timeout"
+CONF_SHARED_SECRET: Final = "shared_secret"
 
 DEFAULT_NAME: Final = "HA Watcher"
 DEFAULT_LOCAL_ONLY: Final = True
@@ -33,7 +34,22 @@ MAX_DETAIL_LEN: Final = 1024
 MAX_TEXT_LEN: Final = 128
 
 STORAGE_VERSION: Final = 1
-STORAGE_SAVE_DELAY: Final = 60  # seconds
+# Routine saves (last report, payload) are written at most this long after the
+# first change; check-name growth and online/offline changes are written at once.
+STORAGE_SAVE_DELAY: Final = 30  # seconds
+
+# Optional request signing (see docs/PAYLOAD.md).
+HEADER_TIMESTAMP: Final = "X-HA-Watcher-Timestamp"
+HEADER_SIGNATURE: Final = "X-HA-Watcher-Signature"
+SIGNATURE_PREFIX: Final = "sha256="
+MAX_CLOCK_SKEW: Final = 300  # seconds
+MAX_REPLAY_CACHE: Final = 1024  # remembered signatures
+
+# Integer ranges accepted in the payload.
+MAX_VERSION: Final = 1000
+MAX_INTERVAL_S: Final = 86_400
+MAX_FAILURES: Final = 1_000_000
+MAX_COUNT: Final = 1_000_000_000
 
 MANUFACTURER: Final = "ha-watcher"
 MODEL: Final = "Watcher service"

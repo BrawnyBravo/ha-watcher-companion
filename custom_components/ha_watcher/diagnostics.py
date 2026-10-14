@@ -7,11 +7,13 @@ from typing import Any
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_WEBHOOK_ID
+from .const import CONF_SHARED_SECRET, CONF_WEBHOOK_ID
 from .hub import HAWatcherConfigEntry
 
 REDACTED = "**REDACTED**"
-TO_REDACT = {CONF_WEBHOOK_ID, "watcher_id"}
+# The webhook id and shared secret protect the endpoint; the watcher id, entry
+# title and check details often name machines or addresses on the network.
+TO_REDACT = {CONF_WEBHOOK_ID, CONF_SHARED_SECRET, "watcher_id", "detail"}
 
 
 async def async_get_config_entry_diagnostics(
@@ -20,13 +22,13 @@ async def async_get_config_entry_diagnostics(
     """Return diagnostics for a config entry."""
     hub = entry.runtime_data
     runtime = hub.diagnostics()
-    # The webhook id is the only secret protecting the endpoint; hide it in the URL too.
-    runtime["webhook_url"] = runtime["webhook_url"].replace(hub.webhook_id, REDACTED)
+    # Only the path is shown (no host or address), with the id hidden.
+    runtime["webhook_path"] = runtime["webhook_path"].replace(hub.webhook_id, REDACTED)
     return {
         "entry": {
-            "title": entry.title,
+            "title": REDACTED,
             "data": async_redact_data(dict(entry.data), TO_REDACT),
-            "options": dict(entry.options),
+            "options": async_redact_data(dict(entry.options), TO_REDACT),
         },
         "runtime": async_redact_data(runtime, TO_REDACT),
     }

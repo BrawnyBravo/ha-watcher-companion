@@ -20,6 +20,7 @@ from homeassistant.helpers import selector
 from .const import (
     CONF_LOCAL_ONLY,
     CONF_OFFLINE_TIMEOUT,
+    CONF_SHARED_SECRET,
     CONF_WEBHOOK_ID,
     DEFAULT_LOCAL_ONLY,
     DEFAULT_NAME,
@@ -93,6 +94,7 @@ class HAWatcherOptionsFlow(OptionsFlowWithReload):
                 data={
                     CONF_OFFLINE_TIMEOUT: int(user_input[CONF_OFFLINE_TIMEOUT]),
                     CONF_LOCAL_ONLY: user_input[CONF_LOCAL_ONLY],
+                    CONF_SHARED_SECRET: user_input.get(CONF_SHARED_SECRET, "").strip(),
                 }
             )
 
@@ -107,6 +109,12 @@ class HAWatcherOptionsFlow(OptionsFlowWithReload):
                     CONF_LOCAL_ONLY,
                     default=options.get(CONF_LOCAL_ONLY, DEFAULT_LOCAL_ONLY),
                 ): bool,
+                vol.Optional(
+                    CONF_SHARED_SECRET,
+                    description={
+                        "suggested_value": options.get(CONF_SHARED_SECRET, "")
+                    },
+                ): str,
             }
         )
         return self.async_show_form(

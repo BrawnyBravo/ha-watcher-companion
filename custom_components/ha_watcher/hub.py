@@ -6,12 +6,15 @@ the offline timer. Entities read from it and subscribe for updates.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
+import hashlib
+import hmac
 from http import HTTPStatus
 import json
 import logging
 import re
+import time
 from typing import Any
 
 from aiohttp import web
@@ -19,8 +22,8 @@ import voluptuous as vol
 
 from homeassistant.components import webhook
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
-from homeassistant.helpers import device_registry as dr
+from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.network import NoURLAvailableError
 from homeassistant.helpers.storage import Store
@@ -30,14 +33,20 @@ from .const import (
     CHECK_NAME_PATTERN,
     CONF_LOCAL_ONLY,
     CONF_OFFLINE_TIMEOUT,
+    CONF_SHARED_SECRET,
     CONF_WEBHOOK_ID,
     DEFAULT_LOCAL_ONLY,
     DEFAULT_OFFLINE_TIMEOUT,
     DOMAIN,
     EVENT_OFFLINE,
     EVENT_ONLINE,
+    HEADER_SIGNATURE,
+    HEADER_TIMESTAMP,
     MAX_BODY_BYTES,
+    MAX_CLOCK_SKEW,
     MAX_KNOWN_CHECKS,
+    MAX_REPLAY_CACHE,
+    SIGNATURE_PREFIX,
     STORAGE_SAVE_DELAY,
     STORAGE_VERSION,
 )
@@ -57,7 +66,30 @@ def webhook_url(hass: HomeAssistant, webhook_id: str) -> str:
             hass, webhook_id, allow_ip=True, prefer_external=False
         )
     except NoURLAvailableError:
-        return f"http://<your-home-assistant-address>:8123{webhook.async_generate_path(webhook_id)}"
+        path = webhook.async_generate_path(webhook_id)
+        return f"http://<your-home-assistant-address>:8123{path}"
+
+
+def check_unique_id(entry_id: str, name: str) -> str:
+    """Unique id of the entity for one check."""
+    return f"{entry_id}_check_{name}"
+
+
+@callback
+def _is_remove_event(data: Mapping[str, Any]) -> bool:
+    return bool(data["action"] == "remove")
+
+
+class _Rejected(Exception):
+    """A report refused with a short reason (never payload values)."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+class _Unauthorized(_Rejected):
+    """A report without a valid signature while a shared secret is set."""
 
 
 class WatcherHub:
@@ -67,26 +99,38 @@ class WatcherHub:
         self.hass = hass
         self.entry = entry
         self.webhook_id: str = entry.data[CONF_WEBHOOK_ID]
-        self.local_only: bool = entry.options.get(CONF_LOCAL_ONLY, DEFAULT_LOCAL_ONLY)
+        options = entry.options
+        self.local_only: bool = options.get(CONF_LOCAL_ONLY, DEFAULT_LOCAL_ONLY)
         self.timeout = timedelta(
-            minutes=entry.options.get(CONF_OFFLINE_TIMEOUT, DEFAULT_OFFLINE_TIMEOUT)
+            minutes=options.get(CONF_OFFLINE_TIMEOUT, DEFAULT_OFFLINE_TIMEOUT)
         )
+        self.shared_secret: str | None = options.get(CONF_SHARED_SECRET) or None
         self.payload: dict[str, Any] | None = None
         self.last_report: datetime | None = None
         # None = unknown (just started, no push yet and timeout not reached).
+        # True only after a fresh report in this session.
         self.online: bool | None = None
-        # Last known online state from before a restart, used only to decide
-        # whether a transition is worth an event.
+        # Last known online state, also from before a restart; decides whether
+        # a transition is worth an event.
         self._previous_known: bool | None = None
         self.bad_payloads = 0
+        self.unauthorized = 0
         self._bad_logged = False
+        self._auth_logged = False
+        self._process_logged = False
+        self._listener_logged = False
         self._interval_warned = False
         self._invalid_names_logged = False
         self._cap_logged = False
-        # Every check name that ever got an entity, in order. Persisted, and
+        # Every check name that has (or had) an entity, in order. Persisted and
         # capped at MAX_KNOWN_CHECKS so a sender cannot flood the registry.
         self.known_checks: list[str] = []
+        # Names that have a live entity object in this session.
+        self._entity_checks: set[str] = set()
+        self._seen_signatures: dict[str, float] = {}
         self._timer: CALLBACK_TYPE | None = None
+        self._save_timer: CALLBACK_TYPE | None = None
+        self._unsub_registry: CALLBACK_TYPE | None = None
         self._listeners: list[Callable[[], None]] = []
         self._new_check_listeners: list[Callable[[list[str]], None]] = []
         self._store: Store[dict[str, Any]] = Store(
@@ -117,13 +161,29 @@ class WatcherHub:
             local_only=self.local_only,
             allowed_methods=["POST"],
         )
+        self._unsub_registry = self.hass.bus.async_listen(
+            er.EVENT_ENTITY_REGISTRY_UPDATED,
+            self._async_registry_updated,
+            event_filter=_is_remove_event,
+        )
         # Give the watcher one full timeout after startup before calling it offline.
         self._schedule_timeout()
 
-    async def async_unload(self) -> None:
-        """Unregister the webhook, stop the timer and save state."""
+    @callback
+    def _shutdown(self) -> None:
+        """Release the webhook, timers and listeners (safe to call twice)."""
         webhook.async_unregister(self.hass, self.webhook_id)
         self._cancel_timer()
+        if self._save_timer is not None:
+            self._save_timer()
+            self._save_timer = None
+        if self._unsub_registry is not None:
+            self._unsub_registry()
+            self._unsub_registry = None
+
+    async def async_unload(self) -> None:
+        """Release everything and write the final state."""
+        self._shutdown()
         await self._store.async_save(self._data_to_store())
 
     async def async_remove(self) -> None:
@@ -142,14 +202,24 @@ class WatcherHub:
     def async_add_check_listener(
         self, add: Callable[[list[str]], None]
     ) -> CALLBACK_TYPE:
-        """Call `add` with names of checks seen for the first time."""
+        """Call `add` with check names that need a new entity."""
         self._new_check_listeners.append(add)
         return lambda: self._new_check_listeners.remove(add)
 
     @callback
     def _notify(self) -> None:
+        # One failing entity must not stop the others from updating.
         for update in list(self._listeners):
-            update()
+            try:
+                update()
+            except Exception as err:
+                if not self._listener_logged:
+                    self._listener_logged = True
+                    _LOGGER.warning(
+                        "An entity of %s could not update (%s)",
+                        self.entry.title,
+                        type(err).__name__,
+                    )
 
     # ---- data access -----------------------------------------------------
 
@@ -159,24 +229,75 @@ class WatcherHub:
         result: dict[str, Any] | None = self.payload["checks"].get(name)
         return result
 
+    @callback
+    def async_initial_checks(self) -> list[str]:
+        """Checks that get an entity at startup: known and in the last report.
+
+        Known checks missing from the last report get no entity, so the user can
+        delete their leftover registry entries (which frees their slot).
+        """
+        reported = self.payload["checks"] if self.payload else {}
+        names = [name for name in self.known_checks if name in reported]
+        self._entity_checks.update(names)
+        return names
+
+    @callback
+    def _async_registry_updated(
+        self, event: Event[er.EventEntityRegistryUpdatedData]
+    ) -> None:
+        """Forget check names whose entity the user deleted."""
+        registry = er.async_get(self.hass)
+        present = {
+            e.unique_id
+            for e in er.async_entries_for_config_entry(registry, self.entry.entry_id)
+        }
+        entry_id = self.entry.entry_id
+        gone = [
+            name
+            for name in self.known_checks
+            if check_unique_id(entry_id, name) not in present
+        ]
+        if not gone:
+            return
+        for name in gone:
+            self.known_checks.remove(name)
+            self._entity_checks.discard(name)
+        self._cap_logged = False
+        self._save_now()
+
     # ---- webhook ---------------------------------------------------------
 
     async def _handle_webhook(
         self, hass: HomeAssistant, webhook_id: str, request: web.Request
     ) -> web.Response:
         # Nothing raised here may reach Home Assistant's webhook logger, which
-        # would log the request; every failure goes through _reject instead.
+        # logs the webhook id; every failure is answered and logged here.
         try:
             payload = await self._read_payload(request)
+        except _Unauthorized as err:
+            return self._unauthorized(err.reason)
         except _Rejected as err:
             return self._reject(err.reason)
         except Exception as err:
             return self._reject(f"unexpected {type(err).__name__}")
-        self.async_process_payload(payload)
+        try:
+            self.async_process_payload(payload)
+        except Exception as err:
+            if not self._process_logged:
+                self._process_logged = True
+                _LOGGER.error(
+                    "Could not apply a status report for %s (%s)",
+                    self.entry.title,
+                    type(err).__name__,
+                )
+            return web.json_response(
+                {"ok": False, "error": "processing failed"},
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
         return web.json_response({"ok": True})
 
     async def _read_payload(self, request: web.Request) -> dict[str, Any]:
-        """Read, size-limit, parse and validate a request body."""
+        """Read, size-limit, authenticate, parse and validate a request body."""
         too_big = f"body larger than {MAX_BODY_BYTES} bytes"
         if (request.content_length or 0) > MAX_BODY_BYTES:
             raise _Rejected(too_big)
@@ -185,14 +306,66 @@ class WatcherHub:
             body += chunk
             if len(body) > MAX_BODY_BYTES:
                 raise _Rejected(too_big)
+        if self.shared_secret:
+            self._verify_signature(request, bytes(body))
         try:
             data = json.loads(body)
-        except (ValueError, RecursionError):
+        except ValueError, RecursionError:
             raise _Rejected("body is not valid JSON") from None
         try:
             return validate_payload(data)
         except vol.Invalid as err:
             raise _Rejected(error_location(err)) from None
+
+    def _verify_signature(self, request: web.Request, body: bytes) -> None:
+        """Check the HMAC signature headers; raise _Unauthorized if wrong."""
+        assert self.shared_secret is not None
+        stamp = request.headers.get(HEADER_TIMESTAMP)
+        signature = request.headers.get(HEADER_SIGNATURE)
+        if not stamp or not signature:
+            raise _Unauthorized("signature headers missing")
+        if not stamp.isascii() or not stamp.isdigit() or len(stamp) > 12:
+            raise _Unauthorized("timestamp header is not a number")
+        now = time.time()
+        if abs(now - int(stamp)) > MAX_CLOCK_SKEW:
+            raise _Unauthorized(
+                f"timestamp more than {MAX_CLOCK_SKEW} s from this clock"
+            )
+        if not signature.startswith(SIGNATURE_PREFIX):
+            raise _Unauthorized("signature header has the wrong format")
+        digest = hmac.new(
+            self.shared_secret.encode(), stamp.encode() + b"." + body, hashlib.sha256
+        ).hexdigest()
+        expected = f"{SIGNATURE_PREFIX}{digest}".encode()
+        if not hmac.compare_digest(expected, signature.encode("utf-8", "replace")):
+            raise _Unauthorized("signature does not match")
+        expiry = self._seen_signatures.get(signature)
+        if expiry is not None and expiry >= now:
+            raise _Unauthorized("replayed request")
+        self._remember_signature(signature, now)
+
+    def _remember_signature(self, signature: str, now: float) -> None:
+        """Remember a used signature for the replay window (bounded)."""
+        seen = self._seen_signatures
+        for sig in [s for s, expiry in seen.items() if expiry < now]:
+            del seen[sig]
+        while len(seen) >= MAX_REPLAY_CACHE:
+            del seen[next(iter(seen))]
+        seen[signature] = now + 2 * MAX_CLOCK_SKEW
+
+    def _unauthorized(self, reason: str) -> web.Response:
+        self.unauthorized += 1
+        if not self._auth_logged:
+            self._auth_logged = True
+            _LOGGER.warning(
+                "Rejected an unauthenticated status report for %s: %s "
+                "(further ones are not logged)",
+                self.entry.title,
+                reason,
+            )
+        return web.json_response(
+            {"ok": False, "error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED
+        )
 
     def _reject(self, reason: str) -> web.Response:
         self.bad_payloads += 1
@@ -216,18 +389,24 @@ class WatcherHub:
         old_version = self.payload["version"] if self.payload else None
         self.payload = payload
         self.last_report = dt_util.utcnow()
+        self._schedule_timeout()
+        urgent = self._set_online(True)
+        if grown := [n for n in payload["checks"] if n not in self.known_checks]:
+            self.known_checks.extend(grown)
+            urgent = True
+        if urgent:
+            # Check-name growth (the flood cap) and online changes must survive
+            # a crash or power cut, so they are written straight away.
+            self._save_now()
+        else:
+            self._save_soon()
+        if new := [n for n in payload["checks"] if n not in self._entity_checks]:
+            self._entity_checks.update(new)
+            for add in list(self._new_check_listeners):
+                add(new)
         self._warn_interval(payload["interval_s"])
         if payload["version"] != old_version:
             self._update_device_version(payload["version"])
-        if new := [n for n in payload["checks"] if n not in self.known_checks]:
-            self.known_checks.extend(new)
-            # Save the grown set soon so a crash cannot reset the cap.
-            self._store.async_delay_save(self._data_to_store, 1)
-            for add in list(self._new_check_listeners):
-                add(new)
-        self._set_online(True)
-        self._schedule_timeout()
-        self._store.async_delay_save(self._data_to_store, STORAGE_SAVE_DELAY)
         self._notify()
 
     def _filter_checks(
@@ -259,7 +438,7 @@ class WatcherHub:
             self._cap_logged = True
             _LOGGER.warning(
                 "%s: check limit of %s reached; ignoring %s new check name(s). "
-                "Remove this integration entry and add it again to reset the limit",
+                "Delete check entities the watcher no longer reports to free slots",
                 self.entry.title,
                 MAX_KNOWN_CHECKS,
                 refused,
@@ -294,8 +473,10 @@ class WatcherHub:
     # ---- online / offline ------------------------------------------------
 
     @callback
-    def _set_online(self, online: bool) -> None:
+    def _set_online(self, online: bool) -> bool:
+        """Set the state; returns True when the stored state changed."""
         previous = self.online if self.online is not None else self._previous_known
+        changed = self._previous_known is not online
         self.online = online
         self._previous_known = online
         if online and previous is False:
@@ -304,6 +485,7 @@ class WatcherHub:
         elif not online and previous is not False:
             # Went quiet, or never reported within the timeout after startup.
             self._fire(EVENT_OFFLINE)
+        return changed
 
     def _fire(self, event_type: str) -> None:
         self.hass.bus.async_fire(
@@ -338,35 +520,61 @@ class WatcherHub:
             self.entry.title,
             int(self.timeout.total_seconds() // 60),
         )
-        self._set_online(False)
-        self._store.async_delay_save(self._data_to_store, STORAGE_SAVE_DELAY)
+        if self._set_online(False):
+            self._save_now()
         self._notify()
 
-    # ---- storage / diagnostics -------------------------------------------
+    # ---- storage ---------------------------------------------------------
+
+    @callback
+    def _save_now(self) -> None:
+        """Write the current state now (any pending routine save is folded in)."""
+        if self._save_timer is not None:
+            self._save_timer()
+            self._save_timer = None
+        self.hass.async_create_task(
+            self._store.async_save(self._data_to_store()),
+            f"{DOMAIN} save {self.entry.entry_id}",
+            eager_start=True,
+        )
+
+    @callback
+    def _save_soon(self) -> None:
+        """Write within STORAGE_SAVE_DELAY of the first unsaved change.
+
+        Later changes do not push the write back, so steady reports cannot
+        starve it (Store.async_delay_save would).
+        """
+        if self._save_timer is None:
+            self._save_timer = async_call_later(
+                self.hass, STORAGE_SAVE_DELAY, self._handle_save_timer
+            )
+
+    @callback
+    def _handle_save_timer(self, _now: datetime) -> None:
+        self._save_timer = None
+        self._save_now()
 
     def _data_to_store(self) -> dict[str, Any]:
         return {
             "payload": self.payload,
             "last_report": self.last_report.isoformat() if self.last_report else None,
             "online": self._previous_known,
-            "known_checks": self.known_checks,
+            "known_checks": list(self.known_checks),
         }
+
+    # ---- diagnostics -----------------------------------------------------
 
     def diagnostics(self) -> dict[str, Any]:
         return {
-            "webhook_url": webhook_url(self.hass, self.webhook_id),
+            "webhook_path": webhook.async_generate_path(self.webhook_id),
             "local_only": self.local_only,
+            "signing_enabled": self.shared_secret is not None,
             "offline_timeout_minutes": int(self.timeout.total_seconds() // 60),
             "online": self.online,
             "last_report": self.last_report.isoformat() if self.last_report else None,
             "rejected_payloads_since_start": self.bad_payloads,
+            "unauthorized_since_start": self.unauthorized,
+            "known_checks": list(self.known_checks),
             "payload": self.payload,
         }
-
-
-class _Rejected(Exception):
-    """A report that is refused with a short reason (no payload values)."""
-
-    def __init__(self, reason: str) -> None:
-        super().__init__(reason)
-        self.reason = reason

@@ -33,8 +33,13 @@ class WatcherEntity(Entity):
 
 
 class WatcherPayloadEntity(WatcherEntity):
-    """Reports values from the last payload; unavailable while the watcher is offline."""
+    """Reports values from the last payload.
+
+    Unavailable unless a fresh report arrived in this session and the watcher
+    is online: data restored after a restart may be old, and data from a
+    silent watcher is stale.
+    """
 
     @property
     def available(self) -> bool:
-        return self.hub.payload is not None and self.hub.online is not False
+        return self.hub.payload is not None and self.hub.online is True

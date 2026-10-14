@@ -15,21 +15,23 @@
       }
     },
     "create_entry": {
-      "default": "Copy this address into the `home_assistant_push.url` setting of your ha-watcher service:\n\n`{webhook_url}`\n\nKeep it private: anyone who knows it can send status reports. You can see it again under this integration's **Configure** button."
+      "default": "Copy this address into the `home_assistant_push.url` setting of your ha-watcher service:\n\n`{webhook_url}`\n\nKeep it private: anyone who knows it can send status reports. You can see it again, and set an optional shared secret for signed reports, under this integration's **Configure** button."
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "HA Watcher options",
-        "description": "Webhook address for the ha-watcher service:\n\n`{webhook_url}`",
+        "description": "Webhook address for the ha-watcher service:\n\n`{webhook_url}`\n\nKeep it private. Home Assistant's own log can contain this address; remove it before posting logs anywhere.",
         "data": {
           "offline_timeout": "Offline timeout",
-          "local_only": "Only accept reports from the local network"
+          "local_only": "Only accept reports from the local network",
+          "shared_secret": "Shared secret (optional)"
         },
         "data_description": {
           "offline_timeout": "Mark the watcher offline when no valid report has arrived for this many minutes. Use at least twice the watcher's report interval.",
-          "local_only": "Turn off only if the watcher reaches Home Assistant over the internet."
+          "local_only": "Turn off only if the watcher reaches Home Assistant over the internet.",
+          "shared_secret": "When set, only reports signed with this secret are accepted. Put the same secret in the watcher's configuration. Recommended when Home Assistant is reached over plain HTTP on a shared network. Leave empty to turn signing off."
         }
       }
     }

@@ -12,7 +12,16 @@ import voluptuous as vol
 
 from homeassistant.util import dt as dt_util
 
-from .const import MAX_CHECK_NAME_LEN, MAX_CHECKS, MAX_DETAIL_LEN, MAX_TEXT_LEN
+from .const import (
+    MAX_CHECK_NAME_LEN,
+    MAX_CHECKS,
+    MAX_COUNT,
+    MAX_DETAIL_LEN,
+    MAX_FAILURES,
+    MAX_INTERVAL_S,
+    MAX_TEXT_LEN,
+    MAX_VERSION,
+)
 
 
 def _strict_int(value: Any) -> int:
@@ -57,18 +66,16 @@ def _optional_timestamp(value: Any) -> str | None:
     return _timestamp(value)
 
 
-def _non_negative(value: Any) -> int:
-    value = _strict_int(value)
-    if value < 0:
-        raise vol.Invalid("must not be negative")
-    return value
+def _int_range(low: int, high: int) -> Any:
+    """A real integer within [low, high]; anything else is rejected."""
 
+    def validate(value: Any) -> int:
+        value = _strict_int(value)
+        if not low <= value <= high:
+            raise vol.Invalid(f"must be between {low} and {high}")
+        return value
 
-def _positive(value: Any) -> int:
-    value = _strict_int(value)
-    if value < 1:
-        raise vol.Invalid("must be at least 1")
-    return value
+    return validate
 
 
 CHECK_SCHEMA = vol.Schema(
@@ -76,7 +83,7 @@ CHECK_SCHEMA = vol.Schema(
         vol.Required("ok"): vol.Any(None, _strict_bool),
         vol.Required("since"): _optional_timestamp,
         vol.Required("detail"): _text(MAX_DETAIL_LEN),
-        vol.Required("failures"): _non_negative,
+        vol.Required("failures"): _int_range(0, MAX_FAILURES),
     },
     extra=vol.REMOVE_EXTRA,
 )
@@ -109,14 +116,14 @@ OUTAGE_SCHEMA = vol.Schema(
 
 PAYLOAD_SCHEMA = vol.Schema(
     {
-        vol.Required("v"): _positive,
+        vol.Required("v"): _int_range(1, MAX_VERSION),
         vol.Required("watcher_id"): vol.All(_text(MAX_TEXT_LEN), vol.Length(min=1)),
         vol.Required("version"): _text(MAX_TEXT_LEN),
         vol.Required("sent_at"): _timestamp,
-        vol.Required("interval_s"): _positive,
+        vol.Required("interval_s"): _int_range(1, MAX_INTERVAL_S),
         vol.Required("checks"): _checks,
         vol.Required("outage"): OUTAGE_SCHEMA,
-        vol.Required("alerts_sent_24h"): _non_negative,
+        vol.Required("alerts_sent_24h"): _int_range(0, MAX_COUNT),
         vol.Required("last_power_cycle"): _optional_timestamp,
         vol.Required("last_recovery_command"): _optional_timestamp,
     },

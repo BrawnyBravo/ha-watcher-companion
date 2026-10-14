@@ -26,8 +26,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: HAWatcherConfigEntry) ->
 async def async_unload_entry(hass: HomeAssistant, entry: HAWatcherConfigEntry) -> bool:
     """Unload a config entry."""
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unloaded:
-        await entry.runtime_data.async_unload()
+    # Release the webhook and timers even if a platform refused to unload, so
+    # nothing is left half-alive.
+    await entry.runtime_data.async_unload()
     return unloaded
 
 
