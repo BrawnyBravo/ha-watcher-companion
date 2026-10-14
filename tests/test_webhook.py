@@ -315,6 +315,17 @@ async def test_processing_error_contained(
     assert "Error processing webhook" not in caplog.text
     assert "RuntimeError" in caplog.text
 
+    # A good report re-arms the warning, so a later failure is logged again.
+    payload["version"] = "1.4.1"
+    assert (await post(payload)).status == 200
+    with patch(
+        "custom_components.ha_watcher.hub.WatcherHub._update_device_version",
+        side_effect=RuntimeError("again"),
+    ):
+        payload["version"] = "1.4.2"
+        assert (await post(payload)).status == 500
+    assert caplog.text.count("Could not apply a status report") == 2
+
 
 async def test_failing_listener_does_not_block_others(
     hass: HomeAssistant, post, payload: dict[str, Any]

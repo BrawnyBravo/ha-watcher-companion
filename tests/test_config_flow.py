@@ -125,12 +125,12 @@ async def test_options_flow_shared_secret(
         {
             CONF_OFFLINE_TIMEOUT: 5,
             CONF_LOCAL_ONLY: True,
-            "shared_secret": "  abc123  ",
+            "shared_secret": "  abcdefghijklmnop1234  ",
         },
     )
     await hass.async_block_till_done()
-    assert setup_entry.options["shared_secret"] == "abc123"
-    assert setup_entry.runtime_data.shared_secret == "abc123"
+    assert setup_entry.options["shared_secret"] == "abcdefghijklmnop1234"
+    assert setup_entry.runtime_data.shared_secret == "abcdefghijklmnop1234"
 
     result = await hass.config_entries.options.async_init(setup_entry.entry_id)
     result = await hass.config_entries.options.async_configure(
@@ -139,3 +139,30 @@ async def test_options_flow_shared_secret(
     await hass.async_block_till_done()
     assert setup_entry.options["shared_secret"] == ""
     assert setup_entry.runtime_data.shared_secret is None
+
+
+async def test_options_flow_short_secret_and_suggestion(
+    hass: HomeAssistant, setup_entry: MockConfigEntry
+) -> None:
+    """A suggested random secret is shown; secrets under 16 characters are refused."""
+    result = await hass.config_entries.options.async_init(setup_entry.entry_id)
+    suggestion = result["description_placeholders"]["suggested_secret"]
+    assert len(suggestion) >= 32
+    schema_key = next(k for k in result["data_schema"].schema if k == "shared_secret")
+    selector_cfg = result["data_schema"].schema[schema_key].config
+    assert selector_cfg["type"] == "password"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_OFFLINE_TIMEOUT: 5, CONF_LOCAL_ONLY: True, "shared_secret": "short"},
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"shared_secret": "secret_too_short"}
+    assert "shared_secret" not in setup_entry.options
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_OFFLINE_TIMEOUT: 5, CONF_LOCAL_ONLY: True, "shared_secret": suggestion},
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert setup_entry.options["shared_secret"] == suggestion

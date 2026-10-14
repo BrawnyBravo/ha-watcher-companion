@@ -51,13 +51,15 @@ async def test_saves_during_continuous_pushes(
     hass_storage: dict[str, Any],
 ) -> None:
     """Reports every 30 s must not postpone the save forever."""
-    for _ in range(10):  # five minutes of reports
+    for _ in range(24):  # twelve minutes of reports
         await post(payload)
         await _tick(hass, freezer, 30)
     stored = _stored(hass_storage)
     assert stored is not None
     last = dt_util.parse_datetime(stored["last_report"])
-    assert dt_util.utcnow() - last <= timedelta(seconds=90)
+    # Routine saves land at most 300 s after the first unsaved change.
+    assert dt_util.utcnow() - last <= timedelta(seconds=330)
+    assert dt_util.utcnow() - last > timedelta(seconds=30)
     assert stored["payload"]["checks"]["backup"]["failures"] == 3
 
 

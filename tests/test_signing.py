@@ -19,7 +19,6 @@ from custom_components.ha_watcher.const import (
     CONF_SHARED_SECRET,
     CONF_WEBHOOK_ID,
     DOMAIN,
-    MAX_REPLAY_CACHE,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
@@ -134,17 +133,59 @@ async def test_replay_rejected_and_logged_once(
     assert headers["X-HA-Watcher-Signature"] not in caplog.text
 
 
-async def test_replay_cache_is_bounded(
-    hass: HomeAssistant, signed_client: TestClient
+async def test_timestamp_must_increase(
+    hass: HomeAssistant, signed_client: TestClient, payload: dict[str, Any]
 ) -> None:
-    hub = hass.config_entries.async_get_entry("entry1").runtime_data
-    now = time.time()
-    for i in range(MAX_REPLAY_CACHE + 50):
-        hub._remember_signature(f"sig{i}", now)
-    assert len(hub._seen_signatures) <= MAX_REPLAY_CACHE
-    # Expired entries are dropped first.
-    hub._remember_signature("late", now + 1000)
-    assert "sig0" not in hub._seen_signatures
+    """A signed request must carry a newer timestamp than the last accepted one."""
+    now = int(time.time())
+    body = json.dumps(payload).encode()
+    ok = await signed_client.post(URL, data=body, headers=sign(body, ts=now - 10))
+    assert ok.status == 200
+    payload["alerts_sent_24h"] = 3
+    other = json.dumps(payload).encode()
+    same_second = await signed_client.post(
+        URL, data=other, headers=sign(other, ts=now - 10)
+    )
+    assert same_second.status == 401
+    older = await signed_client.post(URL, data=other, headers=sign(other, ts=now - 20))
+    assert older.status == 401
+    newer = await signed_client.post(URL, data=other, headers=sign(other, ts=now - 5))
+    assert newer.status == 200
+
+
+async def test_replay_blocked_across_reload(
+    hass: HomeAssistant,
+    signed_client: TestClient,
+    payload: dict[str, Any],
+    hass_storage: dict[str, Any],
+) -> None:
+    """The last accepted timestamp is stored, so a replay after a reload fails."""
+    body = json.dumps(payload).encode()
+    headers = sign(body)
+    assert (await signed_client.post(URL, data=body, headers=headers)).status == 200
+    entry = hass.config_entries.async_get_entry("entry1")
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    stored = hass_storage["ha_watcher.entry1"]["data"]
+    assert stored["last_signed_ts"] == int(headers["X-HA-Watcher-Timestamp"])
+    assert (await signed_client.post(URL, data=body, headers=headers)).status == 401
+
+
+async def test_auth_warning_rearmed_after_good_report(
+    hass: HomeAssistant,
+    signed_client: TestClient,
+    payload: dict[str, Any],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """After a good signed report, the next failure is logged again."""
+    body = json.dumps(payload).encode()
+    assert (await signed_client.post(URL, data=body)).status == 401
+    assert (await signed_client.post(URL, data=body, headers=sign(body))).status == 200
+    assert (await signed_client.post(URL, data=body)).status == 401
+    msgs = [
+        r for r in caplog.records if "Rejected an unauthenticated" in r.getMessage()
+    ]
+    assert len(msgs) == 2
 
 
 async def test_unsigned_accepted_without_secret(
