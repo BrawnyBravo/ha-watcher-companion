@@ -45,7 +45,6 @@ from .const import (
     MAX_BODY_BYTES,
     MAX_CLOCK_SKEW,
     MAX_KNOWN_CHECKS,
-    MAX_REPLAY_CACHE,
     SIGNATURE_PREFIX,
     STORAGE_SAVE_DELAY,
     STORAGE_VERSION,
@@ -127,7 +126,9 @@ class WatcherHub:
         self.known_checks: list[str] = []
         # Names that have a live entity object in this session.
         self._entity_checks: set[str] = set()
-        self._seen_signatures: dict[str, float] = {}
+        # Timestamp of the last accepted signed request; signed requests must
+        # be strictly newer, which blocks replays (also across restarts).
+        self.last_signed_ts: int | None = None
         self._timer: CALLBACK_TYPE | None = None
         self._save_timer: CALLBACK_TYPE | None = None
         self._unsub_registry: CALLBACK_TYPE | None = None
@@ -147,6 +148,9 @@ class WatcherHub:
             if (raw := stored.get("last_report")) is not None:
                 self.last_report = dt_util.parse_datetime(raw)
             self._previous_known = stored.get("online")
+            last_ts = stored.get("last_signed_ts")
+            if isinstance(last_ts, int) and not isinstance(last_ts, bool):
+                self.last_signed_ts = last_ts
             self.known_checks = [
                 name
                 for name in stored.get("known_checks") or []
@@ -294,6 +298,10 @@ class WatcherHub:
                 {"ok": False, "error": "processing failed"},
                 status=HTTPStatus.INTERNAL_SERVER_ERROR,
             )
+        # A good (and, with a secret, authenticated) report re-arms the
+        # one-shot warnings so a later problem is logged again.
+        self._auth_logged = False
+        self._process_logged = False
         return web.json_response({"ok": True})
 
     async def _read_payload(self, request: web.Request) -> dict[str, Any]:
@@ -339,19 +347,12 @@ class WatcherHub:
         expected = f"{SIGNATURE_PREFIX}{digest}".encode()
         if not hmac.compare_digest(expected, signature.encode("utf-8", "replace")):
             raise _Unauthorized("signature does not match")
-        expiry = self._seen_signatures.get(signature)
-        if expiry is not None and expiry >= now:
-            raise _Unauthorized("replayed request")
-        self._remember_signature(signature, now)
-
-    def _remember_signature(self, signature: str, now: float) -> None:
-        """Remember a used signature for the replay window (bounded)."""
-        seen = self._seen_signatures
-        for sig in [s for s, expiry in seen.items() if expiry < now]:
-            del seen[sig]
-        while len(seen) >= MAX_REPLAY_CACHE:
-            del seen[next(iter(seen))]
-        seen[signature] = now + 2 * MAX_CLOCK_SKEW
+        if self.last_signed_ts is not None and int(stamp) <= self.last_signed_ts:
+            raise _Unauthorized("timestamp not newer than the last accepted report")
+        self.last_signed_ts = int(stamp)
+        # Saved with the routine save; a crash inside that window could allow
+        # one replay of a request newer than the saved value (documented).
+        self._save_soon()
 
     def _unauthorized(self, reason: str) -> web.Response:
         self.unauthorized += 1
@@ -561,6 +562,7 @@ class WatcherHub:
             "last_report": self.last_report.isoformat() if self.last_report else None,
             "online": self._previous_known,
             "known_checks": list(self.known_checks),
+            "last_signed_ts": self.last_signed_ts,
         }
 
     # ---- diagnostics -----------------------------------------------------

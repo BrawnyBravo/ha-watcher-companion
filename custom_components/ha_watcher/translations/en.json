@@ -22,7 +22,7 @@
     "step": {
       "init": {
         "title": "HA Watcher options",
-        "description": "Webhook address for the ha-watcher service:\n\n`{webhook_url}`\n\nKeep it private. Home Assistant's own log can contain this address; remove it before posting logs anywhere.",
+        "description": "Webhook address for the ha-watcher service:\n\n`{webhook_url}`\n\nKeep it private. Home Assistant's own log can contain this address; remove it before posting logs anywhere.\n\nOptional shared secret: at least {min_secret_len} characters. A random one you can use: `{suggested_secret}`",
         "data": {
           "offline_timeout": "Offline timeout",
           "local_only": "Only accept reports from the local network",
@@ -34,6 +34,9 @@
           "shared_secret": "When set, only reports signed with this secret are accepted. Put the same secret in the watcher's configuration. Recommended when Home Assistant is reached over plain HTTP on a shared network. Leave empty to turn signing off."
         }
       }
+    },
+    "error": {
+      "secret_too_short": "The shared secret must be at least 16 characters long."
     }
   },
   "entity": {

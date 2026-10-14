@@ -36,14 +36,14 @@ MAX_TEXT_LEN: Final = 128
 STORAGE_VERSION: Final = 1
 # Routine saves (last report, payload) are written at most this long after the
 # first change; check-name growth and online/offline changes are written at once.
-STORAGE_SAVE_DELAY: Final = 30  # seconds
+STORAGE_SAVE_DELAY: Final = 300  # seconds (gentle on SD cards)
 
 # Optional request signing (see docs/PAYLOAD.md).
 HEADER_TIMESTAMP: Final = "X-HA-Watcher-Timestamp"
 HEADER_SIGNATURE: Final = "X-HA-Watcher-Signature"
 SIGNATURE_PREFIX: Final = "sha256="
 MAX_CLOCK_SKEW: Final = 300  # seconds
-MAX_REPLAY_CACHE: Final = 1024  # remembered signatures
+MIN_SECRET_LEN: Final = 16
 
 # Integer ranges accepted in the payload.
 MAX_VERSION: Final = 1000

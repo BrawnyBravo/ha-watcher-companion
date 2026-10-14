@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+import secrets
 from typing import Any
 
 import voluptuous as vol
@@ -28,6 +30,7 @@ from .const import (
     DOMAIN,
     MAX_OFFLINE_TIMEOUT,
     MIN_OFFLINE_TIMEOUT,
+    MIN_SECRET_LEN,
 )
 from .hub import webhook_url
 
@@ -82,23 +85,38 @@ class HAWatcherConfigFlow(ConfigFlow, domain=DOMAIN):
         return HAWatcherOptionsFlow()
 
 
+SECRET_SELECTOR = selector.TextSelector(
+    selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+)
+
+
 class HAWatcherOptionsFlow(OptionsFlowWithReload):
-    """Offline timeout and local-only setting; also shows the webhook URL again."""
+    """Timeout, local-only and optional shared secret; shows the webhook URL again."""
+
+    def __init__(self) -> None:
+        # One random suggestion per dialog, shown in the description.
+        self._suggested_secret = secrets.token_urlsafe(24)
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Manage the options."""
+        errors: dict[str, str] = {}
+        options: Mapping[str, Any] = self.config_entry.options
         if user_input is not None:
-            return self.async_create_entry(
-                data={
-                    CONF_OFFLINE_TIMEOUT: int(user_input[CONF_OFFLINE_TIMEOUT]),
-                    CONF_LOCAL_ONLY: user_input[CONF_LOCAL_ONLY],
-                    CONF_SHARED_SECRET: user_input.get(CONF_SHARED_SECRET, "").strip(),
-                }
-            )
+            secret = user_input.get(CONF_SHARED_SECRET, "").strip()
+            if secret and len(secret) < MIN_SECRET_LEN:
+                errors[CONF_SHARED_SECRET] = "secret_too_short"
+            else:
+                return self.async_create_entry(
+                    data={
+                        CONF_OFFLINE_TIMEOUT: int(user_input[CONF_OFFLINE_TIMEOUT]),
+                        CONF_LOCAL_ONLY: user_input[CONF_LOCAL_ONLY],
+                        CONF_SHARED_SECRET: secret,
+                    }
+                )
+            options = user_input
 
-        options = self.config_entry.options
         schema = vol.Schema(
             {
                 vol.Required(
@@ -114,15 +132,18 @@ class HAWatcherOptionsFlow(OptionsFlowWithReload):
                     description={
                         "suggested_value": options.get(CONF_SHARED_SECRET, "")
                     },
-                ): str,
+                ): SECRET_SELECTOR,
             }
         )
         return self.async_show_form(
             step_id="init",
             data_schema=schema,
+            errors=errors,
             description_placeholders={
                 "webhook_url": webhook_url(
                     self.hass, self.config_entry.data[CONF_WEBHOOK_ID]
-                )
+                ),
+                "suggested_secret": self._suggested_secret,
+                "min_secret_len": str(MIN_SECRET_LEN),
             },
         )
