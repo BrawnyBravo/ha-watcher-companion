@@ -47,7 +47,7 @@ part of the contract.
 | --- | --- | --- |
 | `200` | `{"ok": true}` | Accepted. |
 | `400` | `{"ok": false, "error": "invalid payload"}` | Too large, not JSON, or does not match this contract. Nothing was changed. The integration logs one warning naming the first bad field (never the values) until a valid report arrives. |
-| `401` | `{"ok": false, "error": "unauthorized"}` | A shared secret is set and the request is unsigned, wrongly signed, outside the time window or a replay. Logged once (reason only). |
+| `401` | `{"ok": false, "error": "unauthorized"}` | A shared secret is set and the request is unsigned, wrongly signed, outside the time window, or its timestamp is not newer than the last accepted one (replay). Logged once until the next good report (reason only). |
 | `500` | `{"ok": false, "error": "processing failed"}` | The report was valid but Home Assistant failed while applying it. Logged once with the error type only. |
 | `200` with an empty body | | The webhook id is unknown (integration removed), or a remote request reached a local-only webhook. Home Assistant answers 200 on purpose so the URL cannot be probed. |
 | `405` | | Not a POST (or HEAD). |
@@ -119,11 +119,16 @@ example:
 
 Mapping rule (the watcher implements exactly this, so names stay stable):
 
-1. Process the original keys **in sorted order** (plain string sort of the original key).
+Names are computed once over the watcher's **full configured check set** (every check it
+can ever report), not per report, so a check keeps the same name whether or not other
+checks appear in a given report.
+
+1. Process the original keys of the full set **in sorted order** (plain string sort of
+   the original key).
 2. Lowercase the key and replace every character outside `a-z0-9_` with `_`.
 3. If the result is longer than 40 characters, keep the first 31, then `_`, then the first
    8 hex digits of `sha256(original key as UTF-8)`.
-4. **Collisions:** if the mapped name is already taken by an earlier key in this report,
+4. **Collisions:** if the mapped name is already taken by an earlier key in the set,
    use the first 31 characters of the mapped name + `_` + the first 8 hex digits of
    `sha256(original key)` instead. Example: `core:safe_mode` and `core_safe_mode` both map
    to `core_safe_mode`; `core:safe_mode` sorts first and keeps it, `core_safe_mode` becomes
@@ -195,8 +200,15 @@ Rules on the Home Assistant side:
   clocks synced with NTP).
 - The signature is compared in constant time against the **exact raw body bytes** that
   were sent; sign the bytes you send, after serialising.
-- A signature already accepted within the last 10 minutes is rejected as a replay, so
-  build a fresh timestamp and signature for every request (also for retries).
+- **Timestamps must strictly increase.** A signed request whose timestamp is not greater
+  than the last accepted one is rejected as a replay. Send at most one request per second;
+  if two would share a second, wait for the next one. Build a fresh timestamp and
+  signature for every request, also for retries.
+- The last accepted timestamp is saved with the integration's routine save (at most
+  5 minutes after a report) and on every clean shutdown or reload. Residual risk: if Home
+  Assistant crashes before that save, one request captured in the last few minutes
+  before the crash could be replayed once after the restart, and only while it is still
+  inside the 300-second window.
 
 ```python
 import hashlib, hmac, time
@@ -210,6 +222,12 @@ def sign(secret: str, body: bytes) -> dict[str, str]:
         "X-HA-Watcher-Signature": "sha256=" + digest.hexdigest(),
     }
 ```
+
+### Load
+
+There is no rate limit on accepted reports. Each one updates a handful of entity states,
+which the recorder stores. Anyone holding the URL (and the secret, if set) could
+grow the database by flooding, which is one more reason to keep both private.
 
 ## Example sender (Python, standard library only)
 

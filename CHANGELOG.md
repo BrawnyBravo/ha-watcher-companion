@@ -26,8 +26,9 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - Integer ranges in the payload (for example `interval_s` 1-86400); errors while applying
   a valid report are contained (500, short log line).
 - Optional shared-secret signing (`X-HA-Watcher-Timestamp`, `X-HA-Watcher-Signature`
-  HMAC-SHA256, 300 s window, replay protection).
-- State is saved promptly (check names and online changes at once, the rest within 30 s),
+  HMAC-SHA256, 300 s window, strictly increasing timestamps that survive restarts;
+  password field with a suggested random secret, minimum 16 characters).
+- State is saved promptly (check names and online changes at once, the rest within 5 minutes),
   so it survives a crash or power cut.
 - Deleting a retired check entity frees its slot in the 32-check limit.
 - After a restart, restored check data stays unavailable until the first fresh report.
