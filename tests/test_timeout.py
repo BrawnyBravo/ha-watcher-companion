@@ -92,17 +92,27 @@ async def test_state_restored_after_reload(
     payload: dict[str, Any],
     setup_entry: MockConfigEntry,
 ) -> None:
-    """After a reload the last report is restored and online starts unknown."""
+    """After a reload the last report is restored and online starts unknown.
+
+    Restored check and outage data may be old, so those entities stay
+    unavailable until the first fresh report.
+    """
     await post(payload)
     assert await hass.config_entries.async_reload(setup_entry.entry_id)
     await hass.async_block_till_done()
 
     online = entity_id(hass, "binary_sensor", "online")
     assert hass.states.get(online).state == STATE_UNKNOWN
-    backup = hass.states.get(entity_id(hass, "binary_sensor", "check_backup"))
-    assert backup.state == STATE_ON
+    backup_id = entity_id(hass, "binary_sensor", "check_backup")
+    assert hass.states.get(backup_id).state == STATE_UNAVAILABLE
+    outage_id = entity_id(hass, "binary_sensor", "outage")
+    assert hass.states.get(outage_id).state == STATE_UNAVAILABLE
     last = hass.states.get(entity_id(hass, "sensor", "last_report"))
     assert last.state not in (STATE_UNKNOWN, STATE_UNAVAILABLE)
+
+    await post(payload)
+    assert hass.states.get(backup_id).state == STATE_ON
+    assert hass.states.get(outage_id).state == STATE_OFF
 
 
 async def test_offline_across_reload_no_duplicate_event(

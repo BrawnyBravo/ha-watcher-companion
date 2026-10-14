@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import patch
 
@@ -18,6 +19,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
 from .conftest import WEBHOOK_ID
+from .test_signing import sign
 
 
 async def test_unload_unregisters_webhook(
@@ -70,21 +72,58 @@ async def test_setup_failure_unregisters_webhook(
 async def test_diagnostics_redacts_webhook(
     hass: HomeAssistant,
     hass_client,
-    post,
+    client,
     payload: dict[str, Any],
     setup_entry: MockConfigEntry,
 ) -> None:
-    """Diagnostics never contain the webhook id or the watcher id."""
-    await post(payload)
-    diag = await get_diagnostics_for_config_entry(hass, hass_client, setup_entry)
+    """Diagnostics carry no webhook id, address, title, secret or check detail."""
+    hass.config_entries.async_update_entry(
+        setup_entry, options={**setup_entry.options, "shared_secret": "s3cret-x"}
+    )
+    assert await hass.config_entries.async_reload(setup_entry.entry_id)
+    await hass.async_block_till_done()
+    body = json.dumps(payload).encode()
+    resp = await client.post(
+        f"/api/webhook/{WEBHOOK_ID}", data=body, headers=sign(body, "s3cret-x")
+    )
+    assert resp.status == 200
+    with patch(
+        "homeassistant.components.webhook.get_url",
+        return_value="http://192.0.2.10:8123",
+    ):
+        diag = await get_diagnostics_for_config_entry(hass, hass_client, setup_entry)
     text = repr(diag)
-    assert WEBHOOK_ID not in text
-    assert "watcher-box-1" not in text
+    for secret in (
+        WEBHOOK_ID,
+        "watcher-box-1",
+        "192.0.2.10",
+        "Test Watcher",
+        "Newest backup is 2d old",
+        "s3cret-x",
+    ):
+        assert secret not in text
     assert diag["entry"]["data"]["webhook_id"] == "**REDACTED**"
-    assert diag["runtime"]["webhook_url"].endswith("/api/webhook/**REDACTED**")
+    assert diag["entry"]["title"] == "**REDACTED**"
+    assert diag["entry"]["options"]["shared_secret"] == "**REDACTED**"
+    assert diag["runtime"]["webhook_path"] == "/api/webhook/**REDACTED**"
+    assert diag["runtime"]["signing_enabled"] is True
     assert diag["runtime"]["online"] is True
-    assert diag["runtime"]["payload"]["checks"]["backup"]["failures"] == 3
-    assert diag["entry"]["options"] == {"local_only": True, "offline_timeout": 5}
+    backup = diag["runtime"]["payload"]["checks"]["backup"]
+    assert backup["failures"] == 3
+    assert backup["detail"] == "**REDACTED**"
+
+
+async def test_unload_failure_still_releases_webhook(
+    hass: HomeAssistant, setup_entry: MockConfigEntry
+) -> None:
+    """If a platform refuses to unload, the webhook and timer are still released."""
+    hub = setup_entry.runtime_data
+    with patch.object(
+        hass.config_entries, "async_unload_platforms", return_value=False
+    ):
+        assert not await hass.config_entries.async_unload(setup_entry.entry_id)
+    assert WEBHOOK_ID not in hass.data[webhook.DOMAIN]
+    assert hub._timer is None
 
 
 @pytest.mark.parametrize("local_only", [True, False])

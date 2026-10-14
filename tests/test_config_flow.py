@@ -94,7 +94,11 @@ async def test_options_flow(hass: HomeAssistant, setup_entry: MockConfigEntry) -
     )
     await hass.async_block_till_done()
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert setup_entry.options == {CONF_OFFLINE_TIMEOUT: 10, CONF_LOCAL_ONLY: False}
+    assert setup_entry.options == {
+        CONF_OFFLINE_TIMEOUT: 10,
+        CONF_LOCAL_ONLY: False,
+        "shared_secret": "",
+    }
     hub = setup_entry.runtime_data
     assert hub.local_only is False
     assert hub.timeout.total_seconds() == 600
@@ -109,3 +113,29 @@ async def test_options_flow_rejects_short_timeout(
         await hass.config_entries.options.async_configure(
             result["flow_id"], {CONF_OFFLINE_TIMEOUT: 1, CONF_LOCAL_ONLY: True}
         )
+
+
+async def test_options_flow_shared_secret(
+    hass: HomeAssistant, setup_entry: MockConfigEntry
+) -> None:
+    """A shared secret can be set and cleared again."""
+    result = await hass.config_entries.options.async_init(setup_entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_OFFLINE_TIMEOUT: 5,
+            CONF_LOCAL_ONLY: True,
+            "shared_secret": "  abc123  ",
+        },
+    )
+    await hass.async_block_till_done()
+    assert setup_entry.options["shared_secret"] == "abc123"
+    assert setup_entry.runtime_data.shared_secret == "abc123"
+
+    result = await hass.config_entries.options.async_init(setup_entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_OFFLINE_TIMEOUT: 5, CONF_LOCAL_ONLY: True}
+    )
+    await hass.async_block_till_done()
+    assert setup_entry.options["shared_secret"] == ""
+    assert setup_entry.runtime_data.shared_secret is None

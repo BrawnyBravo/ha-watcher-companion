@@ -131,6 +131,16 @@ def _mutate(payload: dict[str, Any], change: str) -> Any:
         payload["sent_at"] = "0001-01-01T00:00:00+14:00"
     elif change == "check_time_overflow":
         payload["checks"]["api"]["since"] = "9999-12-31T23:59:59-14:00"
+    elif change == "huge_int":
+        payload["alerts_sent_24h"] = 10**400
+    elif change == "int_past_64_bit":
+        payload["checks"]["api"]["failures"] = 2**64
+    elif change == "interval_too_long":
+        payload["interval_s"] = 86_401
+    elif change == "failures_too_many":
+        payload["checks"]["api"]["failures"] = 1_000_001
+    elif change == "alerts_too_many":
+        payload["alerts_sent_24h"] = 1_000_000_001
     elif change == "outage_missing_key":
         payload["outage"] = {"since": None}
     return payload
@@ -156,6 +166,11 @@ def _mutate(payload: dict[str, Any], change: str) -> Any:
         "outage_missing_key",
         "time_overflow",
         "check_time_overflow",
+        "huge_int",
+        "int_past_64_bit",
+        "interval_too_long",
+        "failures_too_many",
+        "alerts_too_many",
     ],
 )
 async def test_invalid_payload_rejected(
@@ -280,3 +295,38 @@ async def test_oversized_chunked_body_rejected(hass: HomeAssistant, client) -> N
 
     resp = await client.post(f"/api/webhook/{WEBHOOK_ID}", data=chunks())
     assert resp.status == 400
+
+
+async def test_processing_error_contained(
+    hass: HomeAssistant,
+    post,
+    payload: dict[str, Any],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An error after validation is answered with 500 and a short log line only."""
+    with patch(
+        "custom_components.ha_watcher.hub.WatcherHub._update_device_version",
+        side_effect=RuntimeError("detail-from-payload"),
+    ):
+        resp = await post(payload)
+    assert resp.status == 500
+    assert await resp.json() == {"ok": False, "error": "processing failed"}
+    assert "detail-from-payload" not in caplog.text
+    assert "Error processing webhook" not in caplog.text
+    assert "RuntimeError" in caplog.text
+
+
+async def test_failing_listener_does_not_block_others(
+    hass: HomeAssistant, post, payload: dict[str, Any]
+) -> None:
+    """One entity failing to update must not stop the rest."""
+    hub = hass.config_entries.async_get_entry("entry1").runtime_data
+
+    def broken() -> None:
+        raise OverflowError("boom")
+
+    hub._listeners.insert(0, broken)
+    resp = await post(payload)
+    assert resp.status == 200
+    online = entity_id(hass, "binary_sensor", "online")
+    assert hass.states.get(online).state == STATE_ON

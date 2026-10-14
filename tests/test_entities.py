@@ -174,3 +174,49 @@ async def test_lifetime_check_cap_survives_reload(
     await post(payload)
     state = hass.states.get(entity_id(hass, "binary_sensor", "check_a0"))
     assert state.state == STATE_ON
+
+
+async def test_deleting_retired_check_frees_its_slot(
+    hass: HomeAssistant,
+    post,
+    payload: dict[str, Any],
+    setup_entry,
+    hass_storage: dict[str, Any],
+) -> None:
+    """A check the watcher stopped sending can be deleted, freeing a cap slot."""
+    payload["checks"] = {f"a{i}": _check() for i in range(32)}
+    await post(payload)
+    payload["checks"] = {f"a{i}": _check() for i in range(1, 32)}
+    await post(payload)  # a0 retired
+    assert await hass.config_entries.async_reload(setup_entry.entry_id)
+    await hass.async_block_till_done()
+    hub = setup_entry.runtime_data
+
+    registry = er.async_get(hass)
+    retired = entity_id(hass, "binary_sensor", "check_a0")
+    # Not provided any more after the reload, so the UI allows deleting it.
+    assert hass.states.get(retired).attributes.get("restored") is True
+    registry.async_remove(retired)
+    await hass.async_block_till_done()
+    assert "a0" not in hub.known_checks
+    assert "a0" not in hass_storage["ha_watcher.entry1"]["data"]["known_checks"]
+
+    payload["checks"]["new_one"] = _check(False)
+    await post(payload)
+    state = hass.states.get(entity_id(hass, "binary_sensor", "check_new_one"))
+    assert state.state == STATE_ON
+    assert len(hub.known_checks) == 32
+
+
+async def test_retired_check_reappearing_gets_entity_again(
+    hass: HomeAssistant, post, payload: dict[str, Any], setup_entry
+) -> None:
+    """A known check missing at restart is recreated when it is reported again."""
+    del payload["checks"]["backup"]
+    await post(payload)
+    assert await hass.config_entries.async_reload(setup_entry.entry_id)
+    await hass.async_block_till_done()
+    payload["checks"]["backup"] = _check(False)
+    await post(payload)
+    state = hass.states.get(entity_id(hass, "binary_sensor", "check_backup"))
+    assert state.state == STATE_ON
