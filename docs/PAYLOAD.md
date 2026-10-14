@@ -11,7 +11,7 @@ every message against it.
 | --- | --- |
 | Method | `POST` (anything else gets `405 Method Not Allowed`) |
 | URL | The webhook address shown when the integration is added, for example `http://192.0.2.10:8123/api/webhook/<64 hex characters>` |
-| Body | One JSON object, UTF-8 |
+| Body | One JSON object, UTF-8, at most 64 KiB (65536 bytes); larger bodies get `400` without being parsed |
 | `Content-Type` | `application/json` (recommended; the body is parsed as JSON either way) |
 | Authentication | None besides the webhook id in the URL. Treat the URL as a secret. |
 | Network | By default Home Assistant only accepts the request from a local network address. If it arrives from elsewhere it is silently ignored (HTTP 200, no effect). The user can turn this off in the integration options. |
@@ -85,7 +85,7 @@ versions can add fields without breaking older integrations.
 | `version` | string | up to 128 characters | ha-watcher software version. Shown as the device's software version. |
 | `sent_at` | timestamp | see Timestamps | When the watcher built this report. Shown as an attribute only; the integration uses its own receive time for "Last report" so clock drift on the watcher box cannot cause false offline alerts. |
 | `interval_s` | integer | `>= 1` | Seconds until the next scheduled report. If twice this is more than the offline timeout, Home Assistant logs one warning. |
-| `checks` | object | at most 200 entries | One entry per check, keyed by check name. See Checks. |
+| `checks` | object | at most 32 entries (more is a `400`) | One entry per check, keyed by check name. See Checks. |
 | `outage` | object | | See Outage. |
 | `alerts_sent_24h` | integer | `>= 0` | Number of alerts the watcher sent in the last 24 hours. |
 | `last_power_cycle` | timestamp or `null` | | When the watcher last power-cycled Home Assistant's host; `null` if never or unknown. |
@@ -93,12 +93,36 @@ versions can add fields without breaking older integrations.
 
 ### Checks
 
-The object key is the check name: a string of 1-128 characters. Use the watcher's own
-result keys as they are, for example `api`, `host`, `core`, `core:safe_mode`, `backup`,
-`supervisor:health`, `memory` or `entity:sensor.example`. Each name becomes one problem
-sensor in Home Assistant, named "Check `<name>`"; a name seen for the first time creates a
-new entity, and a name that stops appearing makes its entity unavailable (it is not
-deleted). **Keep names stable**: renaming a check creates a new entity.
+The object key is the check name. **Names must match `[a-z0-9_]{1,40}`** (lowercase
+letters, digits and underscore, 1-40 characters). A check whose name does not match is
+**ignored** (the rest of the report is still accepted) and Home Assistant logs one
+warning. The watcher must therefore map its internal result keys to this form, for
+example:
+
+| Watcher result key | Name to send |
+| --- | --- |
+| `api`, `host`, `core`, `backup`, `memory` | unchanged |
+| `core:safe_mode` | `core_safe_mode` |
+| `supervisor:health` | `supervisor_health` |
+| `addon:<slug>` | `addon_<slug>` |
+| `entity:sensor.example_temperature` | `entity_sensor_example_temperature` |
+
+Suggested mapping: lowercase, replace every character outside `a-z0-9_` with `_`, and if
+the result is longer than 40 characters keep the first 31 and append `_` plus the first 8
+hex digits of the SHA-256 of the original key (stable and collision-resistant). Put the
+original key in `detail` if the user needs to see it.
+
+Each name becomes one problem sensor in Home Assistant, named "Check `<name>`"; a name
+seen for the first time creates a new entity, and a name that stops appearing makes its
+entity unavailable (it is not deleted). **Keep names stable**: renaming a check creates a
+new entity.
+
+**Lifetime limit:** one integration entry creates at most **32** check entities in total,
+ever (the set of known names is saved and survives restarts). After that, reports are
+still accepted, known checks keep updating, and new names are ignored with one warning.
+This stops anyone who can reach the webhook from flooding Home Assistant's entity
+registry. The user resets it by removing and re-adding the integration entry, so a
+watcher should not churn through check names.
 
 | Key | Type | Rules | Meaning |
 | --- | --- | --- | --- |
@@ -122,7 +146,8 @@ and for the first report after recovery.
 
 ISO 8601 strings **with a timezone**, for example `2026-10-13T12:00:00+00:00` or
 `2026-10-13T12:00:00Z`. Times without a timezone are rejected. The integration converts
-every timestamp to UTC. Send UTC (`datetime.now(timezone.utc).isoformat()` in Python).
+every timestamp to UTC. Dates so extreme that UTC conversion overflows (for example
+`0001-01-01T00:00:00+14:00`) are rejected with `400`. Send UTC (`datetime.now(timezone.utc).isoformat()` in Python).
 
 ### Strict types
 

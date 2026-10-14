@@ -19,3 +19,7 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - `ha_watcher_offline` and `ha_watcher_online` events.
 - Diagnostics with the webhook id redacted.
 - Status payload contract v1, documented in `docs/PAYLOAD.md`.
+- Safety limits on the webhook: 64 KiB body, 32 checks per report, check names must
+  match `[a-z0-9_]{1,40}`, at most 32 check entities per entry over its lifetime
+  (persisted). Malformed input of any kind (deep JSON nesting, out-of-range dates)
+  gets a 400 and never reaches Home Assistant's error log.

@@ -76,7 +76,7 @@ Each watcher becomes one device with these entities:
 | --- | --- | --- |
 | Watcher online | Connectivity | On while reports keep arriving. Off after the offline timeout. Unknown right after Home Assistant starts, until the first report or the timeout. |
 | Home Assistant outage | Problem | On while the watcher considers Home Assistant to be in an outage. Attribute `since`. |
-| Check *name* | Problem | One per watcher check (for example `Check api`, `Check backup`). On means failing; unknown means not run yet. Attributes `detail`, `failures`, `since`. New checks appear automatically. |
+| Check *name* | Problem | One per watcher check (for example `Check api`, `Check backup`). On means failing; unknown means not run yet. Attributes `detail`, `failures`, `since`. New checks appear automatically, up to 32 per watcher in total (a safety limit; remove and re-add the integration to reset it). |
 | Last report | Timestamp (diagnostic) | When Home Assistant last received a valid report. Attributes `sent_at`, `interval_s`, `watcher_version`. |
 | Alerts sent (24h) | Number | Alerts the watcher sent in the last 24 hours. |
 | Last power cycle | Timestamp | When the watcher last power-cycled Home Assistant's host. |
