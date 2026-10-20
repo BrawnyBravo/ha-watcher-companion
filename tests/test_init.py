@@ -21,6 +21,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 
 from .conftest import WEBHOOK_ID
+from .helpers import entity_id
 from .test_signing import sign
 
 
@@ -229,3 +230,36 @@ async def test_unload_stops_intake_before_platforms(
     assert len(memory) == 1
     assert "already exists" not in caplog.text
     assert "Error" not in caplog.text
+
+
+async def test_report_before_platforms_are_set_up(
+    hass: HomeAssistant, mock_entry: MockConfigEntry, payload: dict[str, Any]
+) -> None:
+    """A report between webhook registration and platform setup is not lost.
+
+    Its checks get exactly one entity each, from the initial set.
+    """
+    assert await async_setup_component(hass, "webhook", {})
+    original = hass.config_entries.async_forward_entry_setups
+
+    async def forward(entry, platforms):
+        # The webhook is live before the platforms exist.
+        assert WEBHOOK_ID in hass.data[webhook.DOMAIN]
+        entry.runtime_data.async_process_payload(copy.deepcopy(payload))
+        return await original(entry, platforms)
+
+    with patch.object(
+        hass.config_entries, "async_forward_entry_setups", side_effect=forward
+    ):
+        assert await hass.config_entries.async_setup(mock_entry.entry_id)
+        await hass.async_block_till_done()
+
+    registry = er.async_get(hass)
+    unique_ids = [
+        e.unique_id
+        for e in er.async_entries_for_config_entry(registry, mock_entry.entry_id)
+    ]
+    for name in ("api", "backup", "host"):
+        assert unique_ids.count(f"{mock_entry.entry_id}_check_{name}") == 1
+    backup = hass.states.get(entity_id(hass, "binary_sensor", "check_backup"))
+    assert backup.state == "on"

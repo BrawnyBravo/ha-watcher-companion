@@ -341,3 +341,29 @@ async def test_failing_listener_does_not_block_others(
     assert resp.status == 200
     online = entity_id(hass, "binary_sensor", "online")
     assert hass.states.get(online).state == STATE_ON
+
+
+async def test_head_answers_ok(hass: HomeAssistant, client) -> None:
+    """HEAD gets 200 (documented in docs/PAYLOAD.md) and changes nothing."""
+    resp = await client.head(f"/api/webhook/{WEBHOOK_ID}")
+    assert resp.status == 200
+    online = entity_id(hass, "binary_sensor", "online")
+    assert hass.states.get(online).state == STATE_UNKNOWN
+
+
+async def test_remote_request_ignored_when_local_only(
+    hass: HomeAssistant, post, payload: dict[str, Any]
+) -> None:
+    """A report from outside the local network has no effect on a local-only webhook."""
+    with patch("homeassistant.util.network.is_local", return_value=False):
+        resp = await post(payload)
+    assert resp.status == 200  # Home Assistant answers 200 so the URL cannot be probed
+    assert await resp.text() == ""
+    hub = hass.config_entries.async_get_entry("entry1").runtime_data
+    assert hub.payload is None
+    online = entity_id(hass, "binary_sensor", "online")
+    assert hass.states.get(online).state == STATE_UNKNOWN
+    # The same report from the local network is applied.
+    resp = await post(payload)
+    assert await resp.json() == {"ok": True}
+    assert hass.states.get(online).state == STATE_ON

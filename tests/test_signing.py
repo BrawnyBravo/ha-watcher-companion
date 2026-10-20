@@ -253,3 +253,33 @@ async def test_watcher_clock_step_back_lockout_is_short(
         back = await signed_client.post(URL, data=body, headers=sign(body, ts=now + 61))
         assert back.status == 200
     assert hass.states.get(online).state == "on"
+
+
+async def test_remote_request_accepted_when_local_only_off(
+    hass: HomeAssistant, hass_client_no_auth, payload: dict[str, Any]
+) -> None:
+    """With local-only off (which needs a secret), a signed remote report counts."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Test Watcher",
+        data={CONF_WEBHOOK_ID: WEBHOOK_ID},
+        options={
+            CONF_LOCAL_ONLY: False,
+            CONF_OFFLINE_TIMEOUT: 5,
+            CONF_SHARED_SECRET: SECRET,
+        },
+        entry_id="entry1",
+    )
+    entry.add_to_hass(hass)
+    assert await async_setup_component(hass, "webhook", {})
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    client = await hass_client_no_auth()
+    body = json.dumps(payload).encode()
+    with patch("homeassistant.util.network.is_local", return_value=False):
+        unsigned = await client.post(URL, data=body)
+        assert unsigned.status == 401
+        signed = await client.post(URL, data=body, headers=sign(body))
+        assert signed.status == 200
+    online = hass.states.get(entity_id(hass, "binary_sensor", "online"))
+    assert online.state == "on"
