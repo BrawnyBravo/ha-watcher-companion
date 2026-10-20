@@ -48,3 +48,10 @@ def test_translations_match_strings() -> None:
         (folder / "translations" / "en.json").read_text(encoding="utf-8")
     )
     assert english == strings
+
+
+def test_payload_doc_says_the_secret_is_trimmed() -> None:
+    """Senders must trim the secret like the integration does, or every report fails."""
+    text = (ROOT / "docs" / "PAYLOAD.md").read_text(encoding="utf-8")
+    signing = text.split("## Signing", 1)[1]
+    assert "Spaces and line breaks at either end are\n  removed" in signing

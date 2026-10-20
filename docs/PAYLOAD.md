@@ -201,6 +201,9 @@ Headers:
 
 Rules on the Home Assistant side:
 
+- The secret is at least 16 characters. Spaces and line breaks at either end are
+  removed before it is saved; the sender must trim it the same way (ha-watcher does),
+  or every signature differs and every report gets `401`.
 - The timestamp may be at most **300 seconds behind** and at most **60 seconds ahead**
   of Home Assistant's clock (keep both clocks synced with NTP).
 - The signature is compared in constant time against the **exact raw body bytes** that
