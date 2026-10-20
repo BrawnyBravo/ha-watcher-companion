@@ -12,7 +12,7 @@ from .hub import HAWatcherConfigEntry
 
 REDACTED = "**REDACTED**"
 # The webhook id and shared secret protect the endpoint; the watcher id, entry
-# title and check details often name machines or addresses on the network.
+# title, check names and check details often name machines, rooms or addresses.
 TO_REDACT = {CONF_WEBHOOK_ID, CONF_SHARED_SECRET, "watcher_id", "detail"}
 
 
@@ -24,6 +24,7 @@ async def async_get_config_entry_diagnostics(
     runtime = hub.diagnostics()
     # Only the path is shown (no host or address), with the id hidden.
     runtime["webhook_path"] = runtime["webhook_path"].replace(hub.webhook_id, REDACTED)
+    _anonymise_check_names(runtime)
     return {
         "entry": {
             "title": REDACTED,
@@ -32,3 +33,23 @@ async def async_get_config_entry_diagnostics(
         },
         "runtime": async_redact_data(runtime, TO_REDACT),
     }
+
+
+def _anonymise_check_names(runtime: dict[str, Any]) -> None:
+    """Replace check names with check_1, check_2, ... in place.
+
+    Names come from watcher result keys such as entity ids and add-on slugs,
+    which often name rooms, devices or machines. The same name gets the same
+    placeholder in the known list and in the last report.
+    """
+    payload = runtime.get("payload")
+    reported = list(payload["checks"]) if payload else []
+    placeholders: dict[str, str] = {}
+    for name in [*runtime["known_checks"], *reported]:
+        placeholders.setdefault(name, f"check_{len(placeholders) + 1}")
+    runtime["known_checks"] = [placeholders[n] for n in runtime["known_checks"]]
+    if payload:
+        runtime["payload"] = {
+            **payload,
+            "checks": {placeholders[n]: c for n, c in payload["checks"].items()},
+        }

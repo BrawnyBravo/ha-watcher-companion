@@ -110,9 +110,46 @@ async def test_diagnostics_redacts_webhook(
     assert diag["runtime"]["webhook_path"] == "/api/webhook/**REDACTED**"
     assert diag["runtime"]["signing_enabled"] is True
     assert diag["runtime"]["online"] is True
-    backup = diag["runtime"]["payload"]["checks"]["backup"]
+    # Check names are replaced by stable placeholders, in known-checks order.
+    assert diag["runtime"]["known_checks"] == ["check_1", "check_2", "check_3"]
+    backup = diag["runtime"]["payload"]["checks"]["check_2"]
     assert backup["failures"] == 3
     assert backup["detail"] == "**REDACTED**"
+
+
+async def test_diagnostics_hide_check_names(
+    hass: HomeAssistant,
+    hass_client,
+    post,
+    payload: dict[str, Any],
+    setup_entry: MockConfigEntry,
+) -> None:
+    """Check names (often entity ids naming rooms or devices) are not in the file."""
+    payload["checks"] = {
+        "entity_sensor_example_temperature": payload["checks"]["api"],
+        "supervisor_addon_example_slug": payload["checks"]["backup"],
+    }
+    assert (await post(payload)).status == 200
+    # A known check missing from the last report keeps its own placeholder.
+    payload["checks"] = {
+        "entity_sensor_example_temperature": payload["checks"][
+            "entity_sensor_example_temperature"
+        ]
+    }
+    payload["checks"]["memory_used"] = payload["checks"][
+        "entity_sensor_example_temperature"
+    ]
+    assert (await post(payload)).status == 200
+    diag = await get_diagnostics_for_config_entry(hass, hass_client, setup_entry)
+    text = repr(diag)
+    for name in (
+        "entity_sensor_example_temperature",
+        "supervisor_addon_example_slug",
+        "memory_used",
+    ):
+        assert name not in text
+    assert diag["runtime"]["known_checks"] == ["check_1", "check_2", "check_3"]
+    assert set(diag["runtime"]["payload"]["checks"]) == {"check_1", "check_3"}
 
 
 async def test_unload_failure_still_releases_webhook(

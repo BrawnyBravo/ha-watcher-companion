@@ -152,7 +152,8 @@ The report format is documented in [docs/PAYLOAD.md](docs/PAYLOAD.md) (contract 
   log for "Rejected a status report". If the watcher reaches Home Assistant through a
   reverse proxy or from another network, turn off the local-network option.
 - **Diagnostics**: on the device page, **Download diagnostics**. The webhook address,
-  shared secret, entry name, watcher id and check detail texts are removed from the file.
+  shared secret, entry name, watcher id and check detail texts are removed from the file,
+  and check names are replaced by `check_1`, `check_2` and so on.
   Still read it before attaching it to an issue.
 - **Logs**: Home Assistant's log can contain the webhook address; remove it before sharing.
 
