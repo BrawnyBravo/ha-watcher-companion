@@ -18,15 +18,19 @@ every message against it.
 
 ### Recommended watcher configuration
 
+These are the ha-watcher service's own setting names:
+
 ```yaml
 home_assistant_push:
-  url: "http://192.0.2.10:8123/api/webhook/..."  # pasted from the integration
-  interval: 60   # seconds between reports; also sent as interval_s
-  timeout: 10    # seconds per request
+  url: ${HA_PUSH_URL:-}         # the webhook address shown by the integration
+  every_seconds: 60             # seconds between reports; also sent as interval_s
+  timeout_seconds: 10           # seconds per request, at most 30
+  secret: ${HA_PUSH_SECRET:-}   # the shared secret set in the integration (see Signing)
+  watcher_id: ""                # empty = the machine's host name
 ```
 
-The key names above are a suggestion for the watcher side; only the payload below is
-part of the contract.
+Keep the URL and secret in environment variables rather than in the file. Another
+sender may use its own setting names; only the payload below is part of the contract.
 
 ### When to send
 
