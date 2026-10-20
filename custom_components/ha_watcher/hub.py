@@ -7,6 +7,7 @@ the offline timer. Entities read from it and subscribe for updates.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+import copy
 from datetime import datetime, timedelta
 import hashlib
 import hmac
@@ -57,6 +58,7 @@ _CHECK_NAME_RE = re.compile(CHECK_NAME_PATTERN)
 # A named tuple of exceptions keeps the except clause valid before Python 3.14
 # (the unparenthesised PEP 758 form is not) and stable under the formatter.
 _JSON_ERRORS = (ValueError, RecursionError)
+_RESTORE_ERRORS = (vol.Invalid, TypeError, ValueError, RecursionError)
 
 type HAWatcherConfigEntry = ConfigEntry[WatcherHub]
 
@@ -80,6 +82,29 @@ def check_unique_id(entry_id: str, name: str) -> str:
 @callback
 def _is_remove_event(data: Mapping[str, Any]) -> bool:
     return bool(data["action"] == "remove")
+
+
+def _restored_payload(value: Any) -> dict[str, Any] | None:
+    """The stored last report, or None if it no longer passes validation."""
+    if value is None:
+        return None
+    try:
+        return validate_payload(copy.deepcopy(value))
+    except _RESTORE_ERRORS:
+        _LOGGER.warning("Ignored a stored status report that is no longer valid")
+        return None
+
+
+def _restored_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = dt_util.parse_datetime(value)
+    except ValueError:
+        return None
+    if parsed is None or parsed.tzinfo is None:
+        return None
+    return parsed
 
 
 class _Rejected(Exception):
@@ -149,11 +174,13 @@ class WatcherHub:
     async def async_setup(self) -> None:
         """Restore stored state, register the webhook and start the timer."""
         stored = await self._store.async_load()
-        if stored:
-            self.payload = stored.get("payload")
-            if (raw := stored.get("last_report")) is not None:
-                self.last_report = dt_util.parse_datetime(raw)
-            self._previous_known = stored.get("online")
+        if isinstance(stored, dict):
+            # The file may be damaged or written by another release; each part
+            # is checked and dropped on its own rather than failing setup.
+            self.payload = _restored_payload(stored.get("payload"))
+            self.last_report = _restored_datetime(stored.get("last_report"))
+            online = stored.get("online")
+            self._previous_known = online if isinstance(online, bool) else None
             last_ts = stored.get("last_signed_ts")
             if isinstance(last_ts, int) and not isinstance(last_ts, bool):
                 self.last_signed_ts = last_ts

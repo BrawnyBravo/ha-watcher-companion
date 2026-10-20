@@ -7,6 +7,7 @@ from typing import Any
 from unittest.mock import patch
 
 from freezegun.api import FrozenDateTimeFactory
+import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_capture_events,
@@ -15,11 +16,14 @@ from pytest_homeassistant_custom_component.common import (
 
 from custom_components.ha_watcher.const import EVENT_OFFLINE, EVENT_ONLINE
 from custom_components.ha_watcher.hub import WatcherHub
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import STATE_OFF, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 
+from .conftest import VALID_PAYLOAD
 from .helpers import entity_id
 
 KEY = "ha_watcher.entry1"
@@ -147,3 +151,54 @@ async def test_unrelated_entity_removal_keeps_known_checks(
     registry.async_remove(other.entity_id)
     await hass.async_block_till_done()
     assert setup_entry.runtime_data.known_checks == ["api", "backup", "host"]
+
+
+@pytest.mark.parametrize(
+    ("stored", "keeps_payload"),
+    [
+        # Older or newer release wrote a different payload shape.
+        ({"payload": {"v": 1, "version": "0.9"}, "online": True}, False),
+        ({"payload": {**VALID_PAYLOAD, "checks": "api"}}, False),
+        ({"payload": {**VALID_PAYLOAD, "outage": None}}, False),
+        ({"payload": "not a report"}, False),
+        # Damaged scalar fields.
+        ({"payload": None, "online": "yes", "last_report": 12345}, False),
+        ({"online": 1, "last_report": "not a date", "known_checks": "api"}, False),
+        ({"last_report": "2026-10-13T12:00:00", "last_signed_ts": "9"}, False),
+        # The whole file is the wrong type.
+        (["payload"], False),
+        # A valid stored report is still restored.
+        ({"payload": VALID_PAYLOAD, "known_checks": ["api"], "online": True}, True),
+    ],
+)
+async def test_damaged_storage_is_ignored_part_by_part(
+    hass: HomeAssistant,
+    hass_storage: dict[str, Any],
+    mock_entry: MockConfigEntry,
+    stored: Any,
+    keeps_payload: bool,
+) -> None:
+    """Unusable stored parts are dropped; setup and every entity still work."""
+    hass_storage[KEY] = {"version": 1, "minor_version": 1, "key": KEY, "data": stored}
+    assert await async_setup_component(hass, "webhook", {})
+    assert await hass.config_entries.async_setup(mock_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert mock_entry.state is ConfigEntryState.LOADED
+    hub = mock_entry.runtime_data
+    assert (hub.payload is not None) is keeps_payload
+    online = stored.get("online") if isinstance(stored, dict) else None
+    assert hub._previous_known is (online if isinstance(online, bool) else None)
+    assert hub.last_report is None or hub.last_report.tzinfo is not None
+    assert hub.last_signed_ts is None
+    for platform, key in (
+        ("binary_sensor", "online"),
+        ("binary_sensor", "outage"),
+        ("sensor", "last_report"),
+        ("sensor", "alerts_sent_24h"),
+    ):
+        assert hass.states.get(entity_id(hass, platform, key)) is not None
+    if keeps_payload:
+        assert hub.known_checks == ["api"]
+        api = hass.states.get(entity_id(hass, "binary_sensor", "check_api"))
+        assert api is not None
