@@ -71,7 +71,7 @@ Add one entry per watcher if you run more than one.
 | --- | --- | --- |
 | Offline timeout | 5 minutes (minimum 2) | Mark the watcher offline when no valid report has arrived for this long. Keep it at least twice the watcher's report interval. |
 | Only accept reports from the local network | on | Reject reports that come from outside your network. |
-| Shared secret | empty | Optional, at least 16 characters; the dialog suggests a random one. When set, only reports signed with this secret are accepted (the watcher needs the same secret). Recommended when Home Assistant is reached over plain HTTP on a shared network, because anyone who sees one request could otherwise forge or replay reports. If the watcher restarts within the same second as its last report, or its clock steps backwards, its reports are refused until its clock passes the last accepted time; it recovers on its own. |
+| Shared secret | empty | Optional, at least 16 characters; the dialog suggests a random one. When set, only reports signed with this secret are accepted (the watcher needs the same secret). Recommended when Home Assistant is reached over plain HTTP on a shared network, because anyone who sees one request could otherwise forge or replay reports. If the watcher restarts within the same second as its last report, or its clock steps backwards, its reports are refused until its clock passes the last accepted time; it recovers on its own. Signed reports may be up to 5 minutes behind and up to 1 minute ahead of Home Assistant's clock, so a watcher clock that ran fast and is then corrected is refused for at most a minute; with signing on, keep the offline timeout at least twice the report interval plus one minute. |
 
 ## Entities
 

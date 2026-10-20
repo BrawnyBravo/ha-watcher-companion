@@ -42,7 +42,11 @@ STORAGE_SAVE_DELAY: Final = 300  # seconds (gentle on SD cards)
 HEADER_TIMESTAMP: Final = "X-HA-Watcher-Timestamp"
 HEADER_SIGNATURE: Final = "X-HA-Watcher-Signature"
 SIGNATURE_PREFIX: Final = "sha256="
-MAX_CLOCK_SKEW: Final = 300  # seconds
+MAX_CLOCK_SKEW: Final = 300  # seconds a signed timestamp may lag this clock
+# Seconds a signed timestamp may run ahead. Kept well under the minimum offline
+# timeout: an accepted future stamp becomes the replay floor, so a watcher
+# clock that then steps back is refused for up to this long.
+MAX_CLOCK_AHEAD: Final = 60
 MIN_SECRET_LEN: Final = 16
 
 # Integer ranges accepted in the payload.

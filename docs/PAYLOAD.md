@@ -196,8 +196,8 @@ Headers:
 
 Rules on the Home Assistant side:
 
-- The timestamp must be within **300 seconds** of Home Assistant's clock (keep both
-  clocks synced with NTP).
+- The timestamp may be at most **300 seconds behind** and at most **60 seconds ahead**
+  of Home Assistant's clock (keep both clocks synced with NTP).
 - The signature is compared in constant time against the **exact raw body bytes** that
   were sent; sign the bytes you send, after serialising.
 - **Timestamps must strictly increase.** A signed request whose timestamp is not greater
@@ -207,11 +207,16 @@ Rules on the Home Assistant side:
 - A watcher restarted within the same second as its last signed push, or whose clock
   steps backwards, gets `401` until its timestamp passes the last accepted one. It
   recovers on its own once its clock moves past that value; no action is needed.
+  Because a timestamp can be at most 60 seconds ahead, a watcher clock that ran fast
+  and is then corrected is refused for at most 60 seconds. That is shorter than the
+  2-minute minimum offline timeout, but with signing on keep the offline timeout at
+  least twice the report interval **plus one minute**, so such a correction cannot
+  cause a false offline alert.
 - The last accepted timestamp is saved with the integration's routine save (at most
   5 minutes after a report) and on every clean shutdown or reload. Residual risk: if Home
   Assistant crashes before that save, one request captured in the last few minutes
   before the crash could be replayed once after the restart, and only while it is still
-  inside the 300-second window.
+  inside the time window.
 
 ```python
 import hashlib, hmac, time

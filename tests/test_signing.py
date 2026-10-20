@@ -8,6 +8,7 @@ import json
 import logging
 import time
 from typing import Any
+from unittest.mock import patch
 
 from aiohttp.test_utils import TestClient
 import pytest
@@ -193,3 +194,62 @@ async def test_unsigned_accepted_without_secret(
 ) -> None:
     """Without a secret, signature headers are not required."""
     assert (await post(payload)).status == 200
+
+
+@pytest.mark.parametrize(
+    ("offset", "status"),
+    [
+        (-300, 200),  # exactly at the lag limit
+        (-301, 401),
+        (60, 200),  # exactly at the ahead limit
+        (61, 401),
+        (300, 401),  # was accepted before the ahead window was narrowed
+    ],
+)
+async def test_timestamp_window_boundaries(
+    hass: HomeAssistant,
+    signed_client: TestClient,
+    payload: dict[str, Any],
+    offset: int,
+    status: int,
+) -> None:
+    """Up to 300 s behind and 60 s ahead of Home Assistant's clock is accepted."""
+    now = 1_760_443_200
+    body = json.dumps(payload).encode()
+    with patch("custom_components.ha_watcher.hub.time") as fake_time:
+        fake_time.time.return_value = now
+        resp = await signed_client.post(
+            URL, data=body, headers=sign(body, ts=now + offset)
+        )
+    assert resp.status == status
+
+
+async def test_watcher_clock_step_back_lockout_is_short(
+    hass: HomeAssistant, signed_client: TestClient, payload: dict[str, Any]
+) -> None:
+    """A watcher clock that ran ahead and is then corrected recovers within 60 s.
+
+    That is shorter than the 2-minute minimum offline timeout, so a watcher that
+    keeps reporting every minute is not marked offline by the correction.
+    """
+    now = 1_760_443_200
+    body = json.dumps(payload).encode()
+    online = entity_id(hass, "binary_sensor", "online")
+    with patch("custom_components.ha_watcher.hub.time") as fake_time:
+        fake_time.time.return_value = now
+        # Watcher clock 60 s fast: accepted, and its stamp becomes the floor.
+        ahead = await signed_client.post(
+            URL, data=body, headers=sign(body, ts=now + 60)
+        )
+        assert ahead.status == 200
+        # NTP corrects the watcher clock; reports within the next 60 s are refused.
+        fake_time.time.return_value = now + 30
+        refused = await signed_client.post(
+            URL, data=body, headers=sign(body, ts=now + 30)
+        )
+        assert refused.status == 401
+        # Once real time passes the floor, reports are accepted again.
+        fake_time.time.return_value = now + 61
+        back = await signed_client.post(URL, data=body, headers=sign(body, ts=now + 61))
+        assert back.status == 200
+    assert hass.states.get(online).state == "on"

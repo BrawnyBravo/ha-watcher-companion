@@ -44,6 +44,7 @@ from .const import (
     HEADER_SIGNATURE,
     HEADER_TIMESTAMP,
     MAX_BODY_BYTES,
+    MAX_CLOCK_AHEAD,
     MAX_CLOCK_SKEW,
     MAX_KNOWN_CHECKS,
     SIGNATURE_PREFIX,
@@ -378,10 +379,11 @@ class WatcherHub:
             raise _Unauthorized("signature headers missing")
         if not stamp.isascii() or not stamp.isdigit() or len(stamp) > 12:
             raise _Unauthorized("timestamp header is not a number")
-        now = time.time()
-        if abs(now - int(stamp)) > MAX_CLOCK_SKEW:
+        lag = time.time() - int(stamp)
+        if lag > MAX_CLOCK_SKEW or -lag > MAX_CLOCK_AHEAD:
             raise _Unauthorized(
-                f"timestamp more than {MAX_CLOCK_SKEW} s from this clock"
+                f"timestamp more than {MAX_CLOCK_SKEW} s behind or "
+                f"{MAX_CLOCK_AHEAD} s ahead of this clock"
             )
         if not signature.startswith(SIGNATURE_PREFIX):
             raise _Unauthorized("signature header has the wrong format")
