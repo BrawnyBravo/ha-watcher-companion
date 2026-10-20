@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -14,6 +15,8 @@ from custom_components.ha_watcher.sensor import PAYLOAD_SENSORS, WatcherPayloadS
 from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.entity import Entity
+from homeassistant.setup import async_setup_component
 
 from .helpers import entity_id
 
@@ -220,3 +223,27 @@ async def test_retired_check_reappearing_gets_entity_again(
     await post(payload)
     state = hass.states.get(entity_id(hass, "binary_sensor", "check_backup"))
     assert state.state == STATE_ON
+
+
+async def test_entities_call_base_added_to_hass(
+    hass: HomeAssistant, mock_entry
+) -> None:
+    """Every entity runs the base class setup, so mixins added later still work."""
+    seen: list[str] = []
+    original = Entity.async_added_to_hass
+
+    async def record(self: Entity) -> None:
+        seen.append(self.unique_id)
+        await original(self)
+
+    assert await async_setup_component(hass, "webhook", {})
+    with patch.object(Entity, "async_added_to_hass", record):
+        assert await hass.config_entries.async_setup(mock_entry.entry_id)
+        await hass.async_block_till_done()
+    registry = er.async_get(hass)
+    ours = {
+        e.unique_id
+        for e in er.async_entries_for_config_entry(registry, mock_entry.entry_id)
+    }
+    assert ours
+    assert set(seen) >= ours
