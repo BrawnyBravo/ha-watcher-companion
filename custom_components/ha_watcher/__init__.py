@@ -25,10 +25,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: HAWatcherConfigEntry) ->
 
 async def async_unload_entry(hass: HomeAssistant, entry: HAWatcherConfigEntry) -> bool:
     """Unload a config entry."""
+    hub = entry.runtime_data
+    # Stop taking reports first: a report with a new check name must not add
+    # an entity to a platform that is being torn down (for example during the
+    # reload after an options change).
+    hub._shutdown()
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    # Release the webhook and timers even if a platform refused to unload, so
-    # nothing is left half-alive.
-    await entry.runtime_data.async_unload()
+    # Write the final state even if a platform refused to unload.
+    await hub.async_unload()
     return unloaded
 
 

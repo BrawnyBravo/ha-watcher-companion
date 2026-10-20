@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from typing import Any
 from unittest.mock import patch
@@ -16,6 +17,7 @@ from custom_components.ha_watcher.const import DOMAIN
 from homeassistant.components import webhook
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 
 from .conftest import WEBHOOK_ID
@@ -143,3 +145,50 @@ async def test_webhook_registered_with_local_only(
     handler = hass.data[webhook.DOMAIN][WEBHOOK_ID]
     assert handler.local_only is local_only
     assert handler.allowed_methods == frozenset({"POST"})
+
+
+async def test_unload_stops_intake_before_platforms(
+    hass: HomeAssistant,
+    payload: dict[str, Any],
+    setup_entry: MockConfigEntry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A report arriving while the platforms unload adds no entity to them."""
+    old_hub = setup_entry.runtime_data
+    old_hub.async_process_payload(copy.deepcopy(payload))
+    await hass.async_block_till_done()
+    seen: dict[str, Any] = {}
+    original = hass.config_entries.async_unload_platforms
+
+    async def unload_platforms(entry, platforms):
+        seen["webhook_registered"] = WEBHOOK_ID in hass.data[webhook.DOMAIN]
+        seen["check_listeners"] = len(old_hub._new_check_listeners)
+        # A late report with a never-seen check name, as during a reload.
+        late = copy.deepcopy(payload)
+        late["checks"]["memory"] = dict(late["checks"]["api"])
+        old_hub.async_process_payload(late)
+        return await original(entry, platforms)
+
+    with patch.object(
+        hass.config_entries, "async_unload_platforms", side_effect=unload_platforms
+    ):
+        assert await hass.config_entries.async_reload(setup_entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert seen == {"webhook_registered": False, "check_listeners": 0}
+    # The stopped hub left no timers behind.
+    assert old_hub._timer is None
+    assert old_hub._save_timer is None
+    # The late report is kept: after the reload its new check has one entity.
+    hub = setup_entry.runtime_data
+    assert hub is not old_hub
+    assert "memory" in hub.known_checks
+    registry = er.async_get(hass)
+    memory = [
+        e
+        for e in er.async_entries_for_config_entry(registry, setup_entry.entry_id)
+        if e.unique_id == f"{setup_entry.entry_id}_check_memory"
+    ]
+    assert len(memory) == 1
+    assert "already exists" not in caplog.text
+    assert "Error" not in caplog.text

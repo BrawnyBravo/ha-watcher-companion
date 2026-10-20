@@ -133,6 +133,9 @@ class WatcherHub:
         # be strictly newer, which blocks replays (also across restarts).
         self.last_signed_ts: int | None = None
         self._timer: CALLBACK_TYPE | None = None
+        # Set once the hub is shut down; a report already in flight may still
+        # be applied, but it no longer arms timers or creates entities.
+        self._stopped = False
         self._save_timer: CALLBACK_TYPE | None = None
         self._unsub_registry: CALLBACK_TYPE | None = None
         self._listeners: list[Callable[[], None]] = []
@@ -179,7 +182,11 @@ class WatcherHub:
     @callback
     def _shutdown(self) -> None:
         """Release the webhook, timers and listeners (safe to call twice)."""
+        self._stopped = True
         webhook.async_unregister(self.hass, self.webhook_id)
+        # Platforms are torn down after this; no new check entity may be
+        # added to a platform that is going away.
+        self._new_check_listeners.clear()
         self._cancel_timer()
         if self._save_timer is not None:
             self._save_timer()
@@ -211,7 +218,14 @@ class WatcherHub:
     ) -> CALLBACK_TYPE:
         """Call `add` with check names that need a new entity."""
         self._new_check_listeners.append(add)
-        return lambda: self._new_check_listeners.remove(add)
+
+        @callback
+        def remove() -> None:
+            # Already gone if the hub was shut down first (see _shutdown).
+            if add in self._new_check_listeners:
+                self._new_check_listeners.remove(add)
+
+        return remove
 
     @callback
     def _notify(self) -> None:
@@ -505,6 +519,8 @@ class WatcherHub:
 
     def _schedule_timeout(self) -> None:
         self._cancel_timer()
+        if self._stopped:
+            return
         self._timer = async_call_later(
             self.hass, self.timeout.total_seconds(), self._handle_timeout
         )
@@ -549,7 +565,8 @@ class WatcherHub:
         Later changes do not push the write back, so steady reports cannot
         starve it (Store.async_delay_save would).
         """
-        if self._save_timer is None:
+        if self._save_timer is None and not self._stopped:
+            # After shutdown the final save in async_unload writes everything.
             self._save_timer = async_call_later(
                 self.hass, STORAGE_SAVE_DELAY, self._handle_save_timer
             )
