@@ -54,6 +54,9 @@ from .payload import error_location, validate_payload
 _LOGGER = logging.getLogger(__name__)
 
 _CHECK_NAME_RE = re.compile(CHECK_NAME_PATTERN)
+# A named tuple of exceptions keeps the except clause valid before Python 3.14
+# (the unparenthesised PEP 758 form is not) and stable under the formatter.
+_JSON_ERRORS = (ValueError, RecursionError)
 
 type HAWatcherConfigEntry = ConfigEntry[WatcherHub]
 
@@ -318,7 +321,7 @@ class WatcherHub:
             self._verify_signature(request, bytes(body))
         try:
             data = json.loads(body)
-        except ValueError, RecursionError:
+        except _JSON_ERRORS:
             raise _Rejected("body is not valid JSON") from None
         try:
             return validate_payload(data)
