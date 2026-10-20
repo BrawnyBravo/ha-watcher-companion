@@ -6,6 +6,36 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Setup now fills in a random shared secret and shows it with the webhook address, so
+  reports are signed by default. Turning off "Only accept reports from the local
+  network" (at setup or in the options) now needs a shared secret.
+- Signed timestamps may now be at most 60 seconds ahead of Home Assistant's clock
+  (still up to 300 seconds behind). A watcher clock that ran fast and is then
+  corrected is refused for at most a minute, under the 2-minute minimum offline
+  timeout.
+
+### Added
+
+- A repair recommends a shared secret for every entry without one (an error when
+  local-only is off). Such entries keep working as before until a secret is set.
+- Documentation and dialog text warn that local-only gives no protection behind a
+  reverse proxy or tunnel that hides the client address.
+
+### Fixed
+
+- Unloading or reloading (every options save) stops taking reports before the entities
+  are removed, so a late report cannot add an entity to a platform that is going away.
+- A damaged or differently shaped stored state no longer stops the integration from
+  loading; each invalid part is dropped on its own.
+- Diagnostics replace check names (which often contain entity ids naming rooms or
+  devices) with `check_1`, `check_2` and so on.
+- The integration loads on Python 3.13 again (an except clause used 3.14-only syntax).
+- Entities call the base class setup when added.
+- `docs/PAYLOAD.md` uses the watcher's real setting names (`every_seconds`,
+  `timeout_seconds`, `secret`, `watcher_id`) and says that both sides trim the secret.
+
 ## [0.1.0] - 2026-10-14
 
 ### Added
