@@ -13,8 +13,8 @@ every message against it.
 | URL | The webhook address shown when the integration is added, for example `http://192.0.2.10:8123/api/webhook/<64 hex characters>` |
 | Body | One JSON object, UTF-8, at most 64 KiB (65536 bytes); larger bodies get `400` without being parsed |
 | `Content-Type` | `application/json` (recommended; the body is parsed as JSON either way) |
-| Authentication | The webhook id in the URL, plus an **optional shared-secret signature** (see Signing). Treat the URL as a secret. |
-| Network | By default Home Assistant only accepts the request from a local network address. A request from elsewhere gets HTTP 200 with no effect, and Home Assistant core logs a warning that contains the webhook id. The user can turn the local-only setting off in the integration options. |
+| Authentication | The webhook id in the URL, plus a **shared-secret signature** (see Signing; set up by default, optional on the local network only). Treat the URL as a secret. |
+| Network | By default Home Assistant only accepts the request from a local network address. A request from elsewhere gets HTTP 200 with no effect, and Home Assistant core logs a warning that contains the webhook id. The user can turn the local-only setting off in the integration options, which requires a shared secret. Behind a reverse proxy that hides the client address, every request can look local, so local-only is no protection there. |
 
 ### Recommended watcher configuration
 
@@ -183,13 +183,14 @@ every timestamp to UTC. Dates so extreme that UTC conversion overflows (for exam
 The integration does not coerce types: `"60"` is not an integer, `1` is not a boolean,
 and `true` is not an integer. Use native JSON types.
 
-## Signing (optional)
+## Signing
 
-When the user sets a **shared secret** in the integration options, every request must be
-signed; unsigned or wrongly signed requests get `401`. Without a secret, signature
-headers are ignored. Signing is recommended when Home Assistant is reached over plain
-HTTP on a network shared with other people or devices: it stops anyone who has seen the
-URL from posting forged "all OK" reports, and from replaying a captured one.
+Setup fills in a random **shared secret** by default, and it is required when the
+webhook accepts requests from outside the local network. When a secret is set, every
+request must be signed; unsigned or wrongly signed requests get `401`. Without a secret
+(local network only, not recommended, and flagged by a Home Assistant repair), signature
+headers are ignored. Signing stops anyone who has seen the URL from posting forged "all
+OK" reports, and from replaying a captured one.
 
 Headers:
 

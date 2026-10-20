@@ -52,13 +52,25 @@ Requires Home Assistant 2026.3 or newer.
 2. Give it a name, for example the name of the machine the watcher runs on.
 3. Leave **Only accept reports from the local network** on unless the watcher reaches
    Home Assistant over the internet.
-4. Home Assistant shows a webhook address such as
-   `http://192.0.2.10:8123/api/webhook/3f5c...`. Copy it into the watcher's
-   configuration (see the ha-watcher documentation) and restart the watcher.
+4. Keep the **shared secret** that is filled in for you (a random one). With it, only
+   reports signed by your watcher are accepted. It is required when local-only is off.
+5. Home Assistant shows a webhook address such as
+   `http://192.0.2.10:8123/api/webhook/3f5c...` and the shared secret. Copy them into the
+   watcher's `home_assistant_push.url` and `home_assistant_push.secret` settings (see the
+   ha-watcher documentation) and restart the watcher.
 
-Keep the address private: anyone who has it can send status reports, including fake
-"all OK" reports that would hide a dead watcher. You can see it again at any time under
-the integration's **Configure** button.
+Keep the address and secret private. Without a secret, anyone who has the address can
+send status reports, including fake "all OK" reports that would hide a dead watcher.
+You can see the address again at any time under the integration's **Configure** button.
+
+An entry without a shared secret (for example one added before setup offered it) keeps
+working, but Home Assistant shows a repair recommending one until it is set.
+
+**Local-only and reverse proxies.** Home Assistant decides "local" from the address the
+request comes from. If Home Assistant sits behind a reverse proxy or tunnel on your network
+(and is not set up to trust the proxy's forwarded client address), every request,
+including ones from the internet, can look local. The local-only option then gives no
+protection, so use a shared secret in any proxy or tunnel setup.
 
 **Home Assistant's own log can contain the webhook address** (for example when a request
 arrives from outside your network). Remove it before posting logs anywhere.
@@ -70,8 +82,8 @@ Add one entry per watcher if you run more than one.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | Offline timeout | 5 minutes (minimum 2) | Mark the watcher offline when no valid report has arrived for this long. Keep it at least twice the watcher's report interval. |
-| Only accept reports from the local network | on | Reject reports that come from outside your network. |
-| Shared secret | empty | Optional, at least 16 characters; the dialog suggests a random one. When set, only reports signed with this secret are accepted (the watcher needs the same secret). Recommended when Home Assistant is reached over plain HTTP on a shared network, because anyone who sees one request could otherwise forge or replay reports. If the watcher restarts within the same second as its last report, or its clock steps backwards, its reports are refused until its clock passes the last accepted time; it recovers on its own. Signed reports may be up to 5 minutes behind and up to 1 minute ahead of Home Assistant's clock, so a watcher clock that ran fast and is then corrected is refused for at most a minute; with signing on, keep the offline timeout at least twice the report interval plus one minute. |
+| Only accept reports from the local network | on | Reject reports that come from outside your network. Can be turned off only with a shared secret. Gives no protection behind a reverse proxy that hides the client address (see Setup). |
+| Shared secret | random one from setup | Strongly recommended, at least 16 characters (spaces at either end are removed); the dialog suggests a random one. Required when local-only is off. When set, only reports signed with this secret are accepted (the watcher needs the same secret). Recommended when Home Assistant is reached over plain HTTP on a shared network, because anyone who sees one request could otherwise forge or replay reports. If the watcher restarts within the same second as its last report, or its clock steps backwards, its reports are refused until its clock passes the last accepted time; it recovers on its own. Signed reports may be up to 5 minutes behind and up to 1 minute ahead of Home Assistant's clock, so a watcher clock that ran fast and is then corrected is refused for at most a minute; with signing on, keep the offline timeout at least twice the report interval plus one minute. |
 
 ## Entities
 
@@ -150,7 +162,9 @@ The report format is documented in [docs/PAYLOAD.md](docs/PAYLOAD.md) (contract 
 - **Watcher online stays unknown or off**: check the URL in the watcher's configuration,
   that the watcher box can reach Home Assistant on that address, and the Home Assistant
   log for "Rejected a status report". If the watcher reaches Home Assistant through a
-  reverse proxy or from another network, turn off the local-network option.
+  reverse proxy or from another network, turn off the local-network option (this needs
+  a shared secret). Reports refused with 401 ("Rejected an unauthenticated status
+  report") mean the watcher's secret differs from the one set here.
 - **Diagnostics**: on the device page, **Download diagnostics**. The webhook address,
   shared secret, entry name, watcher id and check detail texts are removed from the file,
   and check names are replaced by `check_1`, `check_2` and so on.
