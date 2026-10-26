@@ -202,8 +202,9 @@ Headers:
 Rules on the Home Assistant side:
 
 - The secret is at least 16 characters. Spaces and line breaks at either end are
-  removed before it is saved; the sender must trim it the same way (ha-watcher does),
-  or every signature differs and every report gets `401`.
+  removed before it is saved; the sender must use the same trimmed value, or every
+  signature differs and every report gets `401`. Paste the secret without spaces or
+  line breaks around it (ha-watcher trims it too from the release after 1.0.0).
 - The timestamp may be at most **300 seconds behind** and at most **60 seconds ahead**
   of Home Assistant's clock (keep both clocks synced with NTP).
 - The signature is compared in constant time against the **exact raw body bytes** that
@@ -247,17 +248,21 @@ grow the database by flooding, which is one more reason to keep both private.
 
 ## Example sender (Python, standard library only)
 
+Setup turns signing on by default, so this example signs every request with the
+`sign()` function above. Leave `secret` empty only for an entry without a secret.
+
 ```python
 import json
 import urllib.request
 from datetime import datetime, timezone
 
 
-def push(url: str, payload: dict, timeout: float = 10) -> None:
+def push(url: str, payload: dict, secret: str = "", timeout: float = 10) -> None:
     body = json.dumps(payload).encode()
-    req = urllib.request.Request(
-        url, data=body, method="POST", headers={"Content-Type": "application/json"}
-    )
+    headers = {"Content-Type": "application/json"}
+    if secret:
+        headers |= sign(secret.strip(), body)
+    req = urllib.request.Request(url, data=body, method="POST", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             resp.read()
@@ -277,6 +282,11 @@ payload = {
     "last_power_cycle": None,
     "last_recovery_command": None,
 }
+push(
+    "http://192.0.2.10:8123/api/webhook/<webhook id from setup>",
+    payload,
+    secret="<shared secret from setup>",
+)
 ```
 
 ## Versioning

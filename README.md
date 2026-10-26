@@ -161,9 +161,9 @@ The report format is documented in [docs/PAYLOAD.md](docs/PAYLOAD.md) (contract 
 
 - **Watcher online stays unknown or off**: check the URL in the watcher's configuration,
   that the watcher box can reach Home Assistant on that address, and the Home Assistant
-  log for "Rejected a status report". If the watcher reaches Home Assistant through a
-  reverse proxy or from another network, turn off the local-network option (this needs
-  a shared secret). Reports refused with 401 ("Rejected an unauthenticated status
+  log for "Rejected a status report". If the watcher reaches Home Assistant from another
+  network, or through a proxy that passes on its real address, turn off the
+  local-network option (this needs a shared secret). Reports refused with 401 ("Rejected an unauthenticated status
   report") mean the watcher's secret differs from the one set here.
 - **Diagnostics**: on the device page, **Download diagnostics**. The webhook address,
   shared secret, entry name, watcher id and check detail texts are removed from the file,
