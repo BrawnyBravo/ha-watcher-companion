@@ -80,6 +80,9 @@ async def setup_entry(
 ) -> MockConfigEntry:
     """Set up the integration with the mock entry."""
     assert await async_setup_component(hass, "webhook", {})
+    # Diagnostics registers HTTP views, which must happen before a test client
+    # starts the server and freezes the router.
+    assert await async_setup_component(hass, "diagnostics", {})
     assert await hass.config_entries.async_setup(mock_entry.entry_id)
     await hass.async_block_till_done()
     return mock_entry
