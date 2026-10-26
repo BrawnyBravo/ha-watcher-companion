@@ -23,6 +23,7 @@ import voluptuous as vol
 
 from homeassistant.components import webhook
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.event import async_call_later
@@ -164,6 +165,7 @@ class WatcherHub:
         self._stopped = False
         self._save_timer: CALLBACK_TYPE | None = None
         self._unsub_registry: CALLBACK_TYPE | None = None
+        self._unsub_stop: CALLBACK_TYPE | None = None
         self._listeners: list[Callable[[], None]] = []
         self._new_check_listeners: list[Callable[[list[str]], None]] = []
         self._store: Store[dict[str, Any]] = Store(
@@ -204,6 +206,11 @@ class WatcherHub:
             self._async_registry_updated,
             event_filter=_is_remove_event,
         )
+        # Home Assistant does not unload config entries when it stops, so the
+        # pending routine save would be lost without this.
+        self._unsub_stop = self.hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_STOP, self._async_handle_stop
+        )
         # Give the watcher one full timeout after startup before calling it offline.
         self._schedule_timeout()
 
@@ -222,6 +229,14 @@ class WatcherHub:
         if self._unsub_registry is not None:
             self._unsub_registry()
             self._unsub_registry = None
+        if self._unsub_stop is not None:
+            self._unsub_stop()
+            self._unsub_stop = None
+
+    async def _async_handle_stop(self, _event: Event) -> None:
+        """Write the final state when Home Assistant stops."""
+        self._unsub_stop = None  # a one-time listener is gone once it has run
+        await self.async_unload()
 
     async def async_unload(self) -> None:
         """Release everything and write the final state."""

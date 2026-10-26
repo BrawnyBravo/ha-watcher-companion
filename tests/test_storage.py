@@ -94,6 +94,21 @@ async def test_online_flag_saved_on_each_transition(
     assert _stored(hass_storage)["online"] is True
 
 
+async def test_routine_save_written_when_home_assistant_stops(
+    hass: HomeAssistant,
+    post,
+    payload: dict[str, Any],
+    hass_storage: dict[str, Any],
+) -> None:
+    """A normal stop does not unload entries; the pending save must still land."""
+    await post(payload)
+    payload["checks"]["backup"]["failures"] = 7
+    await post(payload)
+    assert _stored(hass_storage)["payload"]["checks"]["backup"]["failures"] == 3
+    await hass.async_stop()
+    assert _stored(hass_storage)["payload"]["checks"]["backup"]["failures"] == 7
+
+
 async def test_unclean_restart_restores_state(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
