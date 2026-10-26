@@ -2,7 +2,7 @@
 name = "ha-watcher-companion"
 version = "0.1.0"
 description = "Home Assistant integration that shows status pushed by the ha-watcher service"
-requires-python = ">=3.14"
+requires-python = ">=3.13"
 license = "MIT"
 
 [tool.pytest.ini_options]
