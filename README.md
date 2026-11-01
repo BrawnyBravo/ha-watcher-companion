@@ -83,6 +83,7 @@ Add one entry per watcher if you run more than one.
 | --- | --- | --- |
 | Offline timeout | 5 minutes (minimum 2) | Mark the watcher offline when no valid report has arrived for this long. Keep it at least twice the watcher's report interval. |
 | Only accept reports from the local network | on | Reject reports that come from outside your network. Can be turned off only with a shared secret. Gives no protection behind a reverse proxy that hides the client address (see Setup). |
+| Create repairs for failing checks | on | Show each failing check as a repair (see Repairs). |
 | Shared secret | random one from setup | Strongly recommended, at least 16 characters (spaces at either end are removed); the dialog suggests a random one. Required when local-only is off. When set, only reports signed with this secret are accepted (the watcher needs the same secret). Recommended when Home Assistant is reached over plain HTTP on a shared network, because anyone who sees one request could otherwise forge or replay reports. If the watcher restarts within the same second as its last report, or its clock steps backwards, its reports are refused until its clock passes the last accepted time; it recovers on its own. Signed reports may be up to 5 minutes behind and up to 1 minute ahead of Home Assistant's clock, so a watcher clock that ran fast and is then corrected is refused for at most a minute; with signing on, keep the offline timeout at least twice the report interval plus one minute. |
 
 ## Entities
@@ -109,6 +110,32 @@ shown as current.
 next Home Assistant restart (or a reload of the integration) it is no longer provided, and
 you can delete it from its entity settings. Deleting it also frees its place in the
 32-check limit.
+
+## Repairs
+
+Each failing watcher check is shown as one item under **Settings > System > Repairs**,
+with the check name and the watcher's message. The item is created when a report says
+the check is failing, updated in place while it keeps failing (so **Ignore** sticks), and
+removed when the check reports ok again or the watcher stops reporting it. Checks that
+mean Home Assistant itself is in trouble (`api`, `core`, `host`) are shown as errors,
+all others as warnings. A check that has not run yet (unknown) changes nothing.
+
+Repairs come from the watcher's reports, so after a Home Assistant restart or a reload
+they come back with the next report, not before. They are not stored across restarts, so
+an old problem is never shown as current. Turn this off with **Create repairs for failing
+checks** under **Configure**; existing items are then removed. They are also removed when
+the integration is unloaded or deleted.
+
+Two kinds of repair have a **Fix** button, each with a confirmation first:
+
+- **An entity check** (for example `entity_sensor_example_temperature`) that says the
+  entity has been unavailable: reloads the integration that provides the entity. Only
+  offered when the entity is known to Home Assistant and belongs to an integration.
+- **The backup check**: starts a backup now with Home Assistant's backup integration.
+  Only offered when that integration is running.
+
+Everything else has no fix button; the item links to this section. After a fix the item
+stays until the watcher reports the check as ok, which can take a few minutes.
 
 ## Events
 

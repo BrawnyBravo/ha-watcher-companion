@@ -168,6 +168,7 @@ async def test_options_flow(hass: HomeAssistant, setup_entry: MockConfigEntry) -
         CONF_OFFLINE_TIMEOUT: 10,
         CONF_LOCAL_ONLY: False,
         "shared_secret": SECRET,
+        "create_repairs": True,
     }
     hub = setup_entry.runtime_data
     assert hub.local_only is False

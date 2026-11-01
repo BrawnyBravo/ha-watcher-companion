@@ -8,6 +8,7 @@ from homeassistant.helpers import issue_registry as ir
 
 from .const import DOMAIN
 from .hub import HAWatcherConfigEntry, WatcherHub
+from .repairs import CheckIssues
 
 PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.SENSOR]
 
@@ -43,6 +44,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: HAWatcherConfigEntry) -
     """Delete stored state when the entry is deleted."""
     hub = WatcherHub(hass, entry)
     await hub.async_remove()
+    CheckIssues(hass, entry).async_clear()
     ir.async_delete_issue(hass, DOMAIN, _secret_issue_id(entry))
 
 

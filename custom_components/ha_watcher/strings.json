@@ -33,12 +33,14 @@
         "data": {
           "offline_timeout": "Offline timeout",
           "local_only": "Only accept reports from the local network",
-          "shared_secret": "Shared secret (recommended)"
+          "shared_secret": "Shared secret (recommended)",
+          "create_repairs": "Create repairs for failing checks"
         },
         "data_description": {
           "offline_timeout": "Mark the watcher offline when no valid report has arrived for this many minutes. Use at least twice the watcher's report interval.",
           "local_only": "Turn off only if the watcher reaches Home Assistant over the internet; a shared secret is then required. Behind a reverse proxy or tunnel on your network, every request can look local, so this setting may not protect you there: set a shared secret.",
-          "shared_secret": "When set, only reports signed with this secret are accepted. Put the same secret in the watcher's `home_assistant_push.secret` setting. Leave empty to turn signing off (local network only; not recommended)."
+          "shared_secret": "When set, only reports signed with this secret are accepted. Put the same secret in the watcher's `home_assistant_push.secret` setting. Leave empty to turn signing off (local network only; not recommended).",
+          "create_repairs": "Show each failing watcher check as an item under Settings > System > Repairs. Items appear with the next report after a change and clear on their own when the check is ok again."
         }
       }
     },
@@ -82,6 +84,44 @@
     "no_shared_secret_remote": {
       "title": "{name}: unsigned reports accepted from the internet",
       "description": "The HA Watcher entry **{name}** accepts status reports from outside the local network without a shared secret. Anyone who learns the webhook address can send fake \"all OK\" reports from anywhere and hide a watcher that has stopped.\n\nTo fix this, open the integration's **Configure** dialog, set a shared secret (a random one is suggested there), and put the same secret in the watcher's `home_assistant_push.secret` setting. Until the watcher uses it, its reports are refused, so update both together."
+    },
+    "check_failing": {
+      "title": "{watcher}: check {check} is failing",
+      "description": "The HA Watcher entry **{watcher}** reports that the check **{check}** is failing:\n\n> {message}\n\nThis item clears by itself when the watcher reports the check as ok again. Use **Ignore** to hide it meanwhile; it stays hidden while the check keeps failing."
+    },
+    "check_failing_entity": {
+      "title": "{watcher}: check {check} is failing",
+      "description": "The HA Watcher entry **{watcher}** reports that the check **{check}** is failing:\n\n> {message}\n\nHome Assistant can try to fix this by reloading the integration that provides `{entity}`. This item clears by itself when the watcher reports the check as ok again. Use **Ignore** to hide it meanwhile; it stays hidden while the check keeps failing.",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Reload {integration}?",
+            "description": "This reloads the **{integration}** integration, which provides `{entity}`. All of its devices and entities are briefly unavailable while it reloads.\n\nThe repair stays until the watcher reports the check as ok again, which can take a few minutes. Select **Submit** to reload."
+          }
+        },
+        "abort": {
+          "reloaded": "The integration was reloaded. This repair clears when the watcher reports the check as ok.",
+          "reload_failed": "The integration could not be reloaded. Check its status under Settings > Devices & services.",
+          "entity_not_found": "The entity or its integration no longer exists, so there is nothing to reload."
+        }
+      }
+    },
+    "check_failing_backup": {
+      "title": "{watcher}: check {check} is failing",
+      "description": "The HA Watcher entry **{watcher}** reports that the check **{check}** is failing:\n\n> {message}\n\nHome Assistant can try to fix this by starting a backup now. This item clears by itself when the watcher reports the check as ok again. Use **Ignore** to hide it meanwhile; it stays hidden while the check keeps failing.",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Start a backup now?",
+            "description": "This asks Home Assistant to start a backup now, using your automatic backup settings. It can take several minutes and slows Home Assistant meanwhile.\n\nThe repair stays until the watcher reports the check as ok again, which can take a few minutes after the backup finishes. Select **Submit** to start."
+          }
+        },
+        "abort": {
+          "backup_started": "The backup was started. This repair clears when the watcher reports the check as ok.",
+          "backup_failed": "The backup could not be started. Check the Backup page under Settings > System.",
+          "backup_unavailable": "Home Assistant's backup service is not available, so no backup was started."
+        }
+      }
     }
   }
 }
