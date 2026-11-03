@@ -53,6 +53,7 @@ from .const import (
     STORAGE_VERSION,
 )
 from .payload import error_location, validate_payload
+from .repairs import CheckIssues
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -168,6 +169,7 @@ class WatcherHub:
         self._unsub_stop: CALLBACK_TYPE | None = None
         self._listeners: list[Callable[[], None]] = []
         self._new_check_listeners: list[Callable[[list[str]], None]] = []
+        self.repairs = CheckIssues(hass, entry)
         self._store: Store[dict[str, Any]] = Store(
             hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}"
         )
@@ -466,6 +468,8 @@ class WatcherHub:
             self._entity_checks.update(new)
             for add in list(self._new_check_listeners):
                 add(new)
+        if not self._stopped:
+            self.repairs.async_update(payload["checks"])
         self._warn_interval(payload["interval_s"])
         if payload["version"] != old_version:
             self._update_device_version(payload["version"])
