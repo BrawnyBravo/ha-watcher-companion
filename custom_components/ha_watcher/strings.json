@@ -91,12 +91,11 @@
     },
     "check_failing_entity": {
       "title": "{watcher}: check {check} is failing",
-      "description": "The HA Watcher entry **{watcher}** reports that the check **{check}** is failing:\n\n> {message}\n\nHome Assistant can try to fix this by reloading the integration that provides `{entity}`. This item clears by itself when the watcher reports the check as ok again. Use **Ignore** to hide it meanwhile; it stays hidden while the check keeps failing.",
       "fix_flow": {
         "step": {
           "confirm": {
             "title": "Reload {integration}?",
-            "description": "This reloads the **{integration}** integration, which provides `{entity}`. All of its devices and entities are briefly unavailable while it reloads.\n\nThe repair stays until the watcher reports the check as ok again, which can take a few minutes. Select **Submit** to reload."
+            "description": "The HA Watcher entry **{watcher}** reports that the check **{check}** is failing:\n\n> {message}\n\nThis reloads the **{integration}** integration, which provides `{entity}`. All of its devices and entities are briefly unavailable while it reloads.\n\nThe repair stays until the watcher reports the check as ok again, which can take a few minutes. Select **Submit** to reload."
           }
         },
         "abort": {
@@ -108,12 +107,11 @@
     },
     "check_failing_backup": {
       "title": "{watcher}: check {check} is failing",
-      "description": "The HA Watcher entry **{watcher}** reports that the check **{check}** is failing:\n\n> {message}\n\nHome Assistant can try to fix this by starting a backup now. This item clears by itself when the watcher reports the check as ok again. Use **Ignore** to hide it meanwhile; it stays hidden while the check keeps failing.",
       "fix_flow": {
         "step": {
           "confirm": {
             "title": "Start a backup now?",
-            "description": "This asks Home Assistant to start a backup now, using your automatic backup settings. It can take several minutes and slows Home Assistant meanwhile.\n\nThe repair stays until the watcher reports the check as ok again, which can take a few minutes after the backup finishes. Select **Submit** to start."
+            "description": "The HA Watcher entry **{watcher}** reports that the check **{check}** is failing:\n\n> {message}\n\nThis asks Home Assistant to start a backup now, using your automatic backup settings. It can take several minutes and slows Home Assistant meanwhile.\n\nThe repair stays until the watcher reports the check as ok again, which can take a few minutes after the backup finishes. Select **Submit** to start."
           }
         },
         "abort": {

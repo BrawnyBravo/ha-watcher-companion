@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_mock_service,
@@ -27,6 +28,12 @@ PREFIX = issue_prefix("entry1")
 ENTITY = "sensor.example_temperature"
 ENTITY_CHECK = "entity_sensor_example_temperature"
 ENTITY_DETAIL = f"{ENTITY} has been unavailable for 2.0h"
+
+
+@pytest.fixture(autouse=True)
+async def _repairs_before_http(hass: HomeAssistant) -> None:
+    """Set up Repairs before the test client starts and freezes the web routes."""
+    assert await async_setup_component(hass, "repairs", {})
 
 
 def _check(ok: bool | None, detail: str = "detail") -> dict[str, Any]:
