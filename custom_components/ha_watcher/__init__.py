@@ -18,6 +18,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: HAWatcherConfigEntry) ->
     hub = WatcherHub(hass, entry)
     await hub.async_setup()
     entry.runtime_data = hub
+    # Issues are kept across unload, reload and restart so the user's "Ignore"
+    # survives; only turning repairs off (or removing the entry) deletes them.
+    if not hub.repairs.enabled:
+        hub.repairs.async_clear()
     _async_update_secret_issue(hass, entry, hub)
     try:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

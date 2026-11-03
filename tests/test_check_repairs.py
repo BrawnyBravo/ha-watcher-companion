@@ -153,19 +153,31 @@ async def test_not_run_yet_keeps_existing_issue(
     assert _ids(hass) == {f"{PREFIX}backup"}
 
 
-async def test_unload_removes_issues_and_reload_waits_for_report(
+async def test_ignore_survives_reload(
     hass: HomeAssistant, post, payload: dict[str, Any], setup_entry: MockConfigEntry
 ) -> None:
     await post(payload)
-    assert _ids(hass)
+    ir.async_ignore_issue(hass, DOMAIN, f"{PREFIX}backup", True)
+    dismissed = _issue(hass, "backup").dismissed_version
+    assert dismissed is not None
+    assert await hass.config_entries.async_reload(setup_entry.entry_id)
+    await hass.async_block_till_done()
+    assert _issue(hass, "backup").dismissed_version == dismissed
+    await post(payload)
+    assert _issue(hass, "backup").dismissed_version == dismissed
+
+
+async def test_stale_issue_cleaned_on_next_report_after_reload(
+    hass: HomeAssistant, post, payload: dict[str, Any], setup_entry: MockConfigEntry
+) -> None:
+    await post(payload)
     assert await hass.config_entries.async_unload(setup_entry.entry_id)
-    assert _ids(hass) == set()
+    assert _ids(hass) == {f"{PREFIX}backup"}  # kept while unloaded
     assert await hass.config_entries.async_setup(setup_entry.entry_id)
     await hass.async_block_till_done()
-    # The stored report is old data: nothing until a fresh report arrives.
-    assert _ids(hass) == set()
+    del payload["checks"]["backup"]
     await post(payload)
-    assert _ids(hass) == {f"{PREFIX}backup"}
+    assert _ids(hass) == set()
 
 
 async def test_remove_entry_removes_issues(
@@ -274,6 +286,12 @@ async def test_reload_fix_flow(
     reload.assert_awaited_once_with("owner1")
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reloaded"
+    started = await _start_fix(hass, ENTITY_CHECK)
+    with patch.object(
+        hass.config_entries, "async_reload", AsyncMock(return_value=False)
+    ):
+        result = await manager.async_configure(started["flow_id"], {})
+    assert result["reason"] == "reload_failed"
     # The issue stays until the watcher reports ok.
     assert _issue(hass, ENTITY_CHECK) is not None
 

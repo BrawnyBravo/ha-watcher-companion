@@ -188,8 +188,10 @@ class ReloadEntityOwnerFlow(ConfirmRepairFlow):
         if owner is None:
             return self.async_abort(reason="entity_not_found")
         try:
-            await self.hass.config_entries.async_reload(owner.entry_id)
+            reloaded = await self.hass.config_entries.async_reload(owner.entry_id)
         except HomeAssistantError:
+            return self.async_abort(reason="reload_failed")
+        if not reloaded:
             return self.async_abort(reason="reload_failed")
         # Not async_create_entry: that would delete the issue now, but only
         # the watcher's next "ok" report may clear it.
@@ -226,4 +228,6 @@ async def async_create_fix_flow(
         return ReloadEntityOwnerFlow(
             str(data.get("entity_id")), str(data.get("entry_id"))
         )
-    return StartBackupFlow()
+    if data.get("kind") == KIND_BACKUP:
+        return StartBackupFlow()
+    raise ValueError(f"unknown fix kind for {issue_id}")

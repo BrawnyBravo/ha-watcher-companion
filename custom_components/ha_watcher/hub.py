@@ -225,9 +225,6 @@ class WatcherHub:
         # added to a platform that is going away.
         self._new_check_listeners.clear()
         self._cancel_timer()
-        # Issues describe live data; with no hub taking reports they would go
-        # stale, so they are removed (the next report after setup recreates them).
-        self.repairs.async_clear()
         if self._save_timer is not None:
             self._save_timer()
             self._save_timer = None

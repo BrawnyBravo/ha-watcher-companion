@@ -124,7 +124,8 @@ Repairs come from the watcher's reports, so after a Home Assistant restart or a 
 they come back with the next report, not before. They are not stored across restarts, so
 an old problem is never shown as current. Turn this off with **Create repairs for failing
 checks** under **Configure**; existing items are then removed. They are also removed when
-the integration is unloaded or deleted.
+the integration is deleted. A reload or restart keeps them, so an **Ignore** you set
+survives.
 
 Two kinds of repair have a **Fix** button, each with a confirmation first:
 
