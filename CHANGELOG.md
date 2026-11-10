@@ -4,6 +4,17 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Repairs for failing watcher checks: one item per failing check, updated in place and
+  removed when the check is ok again or no longer reported. Errors for `api`, `core` and
+  `host`, warnings otherwise. Turn off with the new option **Create repairs for failing
+  checks** (default on).
+- Fix buttons with a confirmation step: reload the integration that owns an unavailable
+  entity, and start a backup now for the backup check.
+
 ## [0.1.1] - 2026-10-27
 
 ### Changed

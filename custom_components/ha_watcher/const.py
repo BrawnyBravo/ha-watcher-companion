@@ -10,9 +10,11 @@ CONF_WEBHOOK_ID: Final = "webhook_id"
 CONF_LOCAL_ONLY: Final = "local_only"
 CONF_OFFLINE_TIMEOUT: Final = "offline_timeout"
 CONF_SHARED_SECRET: Final = "shared_secret"
+CONF_CREATE_REPAIRS: Final = "create_repairs"
 
 DEFAULT_NAME: Final = "HA Watcher"
 DEFAULT_LOCAL_ONLY: Final = True
+DEFAULT_CREATE_REPAIRS: Final = True
 DEFAULT_OFFLINE_TIMEOUT: Final = 5  # minutes
 MIN_OFFLINE_TIMEOUT: Final = 2  # minutes
 MAX_OFFLINE_TIMEOUT: Final = 1440  # minutes (one day)
