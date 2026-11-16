@@ -8,6 +8,7 @@ from homeassistant.helpers import issue_registry as ir
 
 from .const import DOMAIN
 from .hub import HAWatcherConfigEntry, WatcherHub
+from .repairs import CheckIssues
 
 PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.SENSOR]
 
@@ -17,6 +18,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: HAWatcherConfigEntry) ->
     hub = WatcherHub(hass, entry)
     await hub.async_setup()
     entry.runtime_data = hub
+    # Issues are kept across unload, reload and restart so the user's "Ignore"
+    # survives; only turning repairs off (or removing the entry) deletes them.
+    if not hub.repairs.enabled:
+        hub.repairs.async_clear()
     _async_update_secret_issue(hass, entry, hub)
     try:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -43,6 +48,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: HAWatcherConfigEntry) -
     """Delete stored state when the entry is deleted."""
     hub = WatcherHub(hass, entry)
     await hub.async_remove()
+    CheckIssues(hass, entry).async_clear()
     ir.async_delete_issue(hass, DOMAIN, _secret_issue_id(entry))
 
 
