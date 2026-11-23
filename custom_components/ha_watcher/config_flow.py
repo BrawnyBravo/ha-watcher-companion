@@ -20,10 +20,12 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_CREATE_REPAIRS,
     CONF_LOCAL_ONLY,
     CONF_OFFLINE_TIMEOUT,
     CONF_SHARED_SECRET,
     CONF_WEBHOOK_ID,
+    DEFAULT_CREATE_REPAIRS,
     DEFAULT_LOCAL_ONLY,
     DEFAULT_NAME,
     DEFAULT_OFFLINE_TIMEOUT,
@@ -130,7 +132,7 @@ class HAWatcherConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class HAWatcherOptionsFlow(OptionsFlowWithReload):
-    """Timeout, local-only and optional shared secret; shows the webhook URL again."""
+    """Timeout, local-only, repairs and optional shared secret; shows the webhook URL again."""
 
     def __init__(self) -> None:
         # One random suggestion per dialog, shown in the description. It is not
@@ -153,6 +155,7 @@ class HAWatcherOptionsFlow(OptionsFlowWithReload):
                         CONF_OFFLINE_TIMEOUT: int(user_input[CONF_OFFLINE_TIMEOUT]),
                         CONF_LOCAL_ONLY: user_input[CONF_LOCAL_ONLY],
                         CONF_SHARED_SECRET: secret,
+                        CONF_CREATE_REPAIRS: user_input[CONF_CREATE_REPAIRS],
                     }
                 )
             options = user_input
@@ -166,6 +169,10 @@ class HAWatcherOptionsFlow(OptionsFlowWithReload):
                 vol.Required(
                     CONF_LOCAL_ONLY,
                     default=options.get(CONF_LOCAL_ONLY, DEFAULT_LOCAL_ONLY),
+                ): bool,
+                vol.Required(
+                    CONF_CREATE_REPAIRS,
+                    default=options.get(CONF_CREATE_REPAIRS, DEFAULT_CREATE_REPAIRS),
                 ): bool,
                 vol.Optional(
                     CONF_SHARED_SECRET,
